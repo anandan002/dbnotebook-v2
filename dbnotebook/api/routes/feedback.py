@@ -154,10 +154,12 @@ def create_feedback_routes(app, pipeline, db_manager, notebook_manager):
                 return validation_error("nodes must be a non-empty list")
 
             service = FeedbackService(pipeline, db_manager, notebook_manager)
-            service.annotate_nodes(feedback_id=feedback_id, nodes=nodes)
+            service.annotate_nodes(feedback_id=feedback_id, nodes=nodes, requesting_user_id=user_id)
 
             return jsonify({"success": True, "annotated": len(nodes)})
 
+        except PermissionError as pe:
+            return error_response(str(pe), 403)
         except ValueError as ve:
             return error_response(str(ve), 400)
         except RuntimeError as re:

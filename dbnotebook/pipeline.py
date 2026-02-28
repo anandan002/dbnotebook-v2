@@ -1916,4 +1916,20 @@ Refined Implementation Plan:"""
             except Exception as e:
                 logger.error(f"Error stopping RAPTORWorker: {e}")
 
+        # Stop FeedbackAnalyzerWorker
+        if hasattr(self, '_feedback_analyzer_worker') and self._feedback_analyzer_worker:
+            try:
+                self._feedback_analyzer_worker.stop()
+                logger.info("FeedbackAnalyzerWorker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping FeedbackAnalyzerWorker: {e}")
+
+        # Flush Langfuse trace buffer before exit
+        try:
+            from dbnotebook.core.observability import get_tracer
+            get_tracer().flush()
+            logger.info("Langfuse trace buffer flushed")
+        except Exception as e:
+            logger.error(f"Langfuse flush failed on shutdown: {e}")
+
         logger.info("Pipeline shutdown complete")

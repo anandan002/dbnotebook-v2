@@ -79,7 +79,10 @@ export const FeedbackWidget = memo(function FeedbackWidget({
 
   const handleDismiss = useCallback(() => {
     setExpanded(false);
-  }, []);
+    if (submitState !== 'submitted') {
+      setHelpful(null);
+    }
+  }, [submitState]);
 
   // Submitted confirmation — compact
   if (submitState === 'submitted') {
@@ -100,6 +103,7 @@ export const FeedbackWidget = memo(function FeedbackWidget({
           onClick={() => handleThumbsClick(true)}
           disabled={submitState === 'submitting'}
           title="Thumbs up"
+          aria-label="Mark as helpful"
           className={`
             p-1.5 rounded-lg transition-all duration-150
             ${helpful === true
@@ -114,6 +118,7 @@ export const FeedbackWidget = memo(function FeedbackWidget({
           onClick={() => handleThumbsClick(false)}
           disabled={submitState === 'submitting'}
           title="Thumbs down"
+          aria-label="Mark as not helpful"
           className={`
             p-1.5 rounded-lg transition-all duration-150
             ${helpful === false

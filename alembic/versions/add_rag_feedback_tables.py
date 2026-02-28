@@ -70,6 +70,7 @@ def upgrade() -> None:
         sa.CheckConstraint('rating >= 1 AND rating <= 5', name='ck_rag_feedback_rating'),
     )
     op.create_index('ix_rag_feedback_trace', 'rag_feedback', ['trace_id'])
+    op.create_unique_constraint('uq_rag_feedback_trace_id', 'rag_feedback', ['trace_id'])
     op.create_index(
         'ix_rag_feedback_notebook',
         'rag_feedback',
@@ -202,4 +203,5 @@ def downgrade() -> None:
     op.drop_table('rag_adaptive_settings')
     op.drop_table('rag_feedback_insights')
     op.drop_table('rag_feedback_nodes')
+    op.drop_constraint('uq_rag_feedback_trace_id', 'rag_feedback', type_='unique')
     op.drop_table('rag_feedback')

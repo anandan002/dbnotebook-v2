@@ -46,6 +46,8 @@ class LangfuseTracer:
         tracer.flush()
     """
 
+    _MAX_ACTIVE_TRACES = 10_000
+
     def __init__(self) -> None:
         """Initialize the tracer — lazily loads Langfuse SDK."""
         self._enabled: bool = False
@@ -127,6 +129,11 @@ class LangfuseTracer:
                 metadata=trace_metadata,
             )
             with self._lock:
+                if len(self._traces) >= self._MAX_ACTIVE_TRACES:
+                    # Evict oldest entry to prevent unbounded growth
+                    oldest_key = next(iter(self._traces))
+                    self._traces.pop(oldest_key)
+                    logger.debug(f"Evicted oldest trace {oldest_key} from active traces (max={self._MAX_ACTIVE_TRACES})")
                 self._traces[trace_id] = trace
             logger.debug(f"Langfuse trace started: {trace_id}")
         except Exception as exc:

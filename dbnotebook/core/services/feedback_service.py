@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
+
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -87,11 +89,16 @@ class FeedbackService(BaseService):
                 notebook_id=notebook_id,
                 rating=rating,
                 helpful=helpful,
-                user_message=user_message[:2000] if user_message else None,
+                user_message=user_message[:500] if user_message else None,
                 feedback_category=feedback_category,
                 created_at=datetime.utcnow(),
             )
-            session.add(record)
+            try:
+                session.add(record)
+                session.flush()  # Trigger DB constraint check before commit
+            except IntegrityError:
+                session.rollback()
+                raise ValueError(f"Feedback for trace_id='{trace_id}' already exists")
 
         self._logger.info(
             f"Feedback stored | feedback_id={feedback_id} | trace_id={trace_id} | "
@@ -132,6 +139,7 @@ class FeedbackService(BaseService):
         self,
         feedback_id: str,
         nodes: List[Dict],
+        requesting_user_id: Optional[str] = None,
     ) -> bool:
         """Attach per-node relevance annotations to an existing feedback record.
 
@@ -141,12 +149,15 @@ class FeedbackService(BaseService):
                    - node_id (str, required)
                    - node_rank (int, optional)
                    - was_relevant (bool, optional)
+            requesting_user_id: UUID of the user making the request. When provided,
+                                the feedback record must belong to this user.
 
         Returns:
             True on success.
 
         Raises:
             ValueError: If the feedback_id does not exist.
+            PermissionError: If requesting_user_id does not own the feedback record.
             RuntimeError: If the database is not configured.
         """
         self._validate_database_available()
@@ -161,6 +172,9 @@ class FeedbackService(BaseService):
             )
             if feedback is None:
                 raise ValueError(f"feedback_id='{feedback_id}' not found")
+
+            if requesting_user_id and str(feedback.user_id) != str(requesting_user_id):
+                raise PermissionError(f"Feedback record does not belong to the requesting user")
 
             for node_data in nodes:
                 node_id = node_data.get("node_id")
