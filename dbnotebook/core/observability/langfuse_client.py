@@ -1,8 +1,14 @@
-"""Langfuse observability client for LLM tracing and evaluation.
+"""Langfuse 3.x observability client for LLM tracing and evaluation.
 
-Provides a singleton LangfuseTracer that wraps the Langfuse Python SDK
+Provides a singleton LangfuseTracer that wraps the Langfuse 3.x Python SDK
 with graceful degradation — if Langfuse is disabled or unavailable, all
 methods become no-ops and the main query flow is never disrupted.
+
+Langfuse 3.x API changes from 2.x:
+  - No trace()/span()/generation() on client — use start_span()/start_generation()
+  - Observations are grouped via TraceContext(trace_id=...)
+  - OTEL-backed spans with .update() and .end()
+  - Scores via create_score(trace_id=..., name=..., value=...)
 
 Configuration (env vars):
     LANGFUSE_ENABLED     — "true" to enable (default: false)
@@ -19,6 +25,11 @@ import time
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
+
+def _make_trace_id() -> str:
+    """Generate a Langfuse-compatible trace ID: 32 lowercase hex chars (no hyphens)."""
+    return uuid4().hex  # e.g. 'd00cfcd30b8d41a489645d6705dd1428'
+
 logger = logging.getLogger(__name__)
 
 # Module-level singleton with thread-safe lazy initialization
@@ -27,22 +38,21 @@ _tracer_lock = threading.Lock()
 
 
 class LangfuseTracer:
-    """Thread-safe Langfuse tracing wrapper with graceful degradation.
+    """Thread-safe Langfuse 3.x tracing wrapper with graceful degradation.
 
     All public methods are wrapped in try/except so tracing failures
     NEVER propagate into the main RAG pipeline flow.
 
-    The tracer uses the Langfuse low-level SDK to create traces, spans,
-    and generation observations. Each public method returns a sensible
-    default (empty string, None, or False) when Langfuse is disabled or
-    an error occurs.
+    The tracer uses the Langfuse 3.x SDK with TraceContext for grouping
+    spans under a single trace. Each active trace stores its root span
+    so child observations can be attached.
 
     Usage::
 
         tracer = get_tracer()
         trace_id = tracer.start_trace("rag_query", user_id=..., notebook_id=..., metadata={})
         tracer.log_span(trace_id, "retrieval", input_data=..., output_data=..., timing_ms=...)
-        tracer.log_generation(trace_id, "llm_call", model=..., prompt=..., completion=..., ...)
+        tracer.log_generation(trace_id, "llm_call", model=..., prompt=..., completion=..., usage=...)
         tracer.end_trace(trace_id, status="success")
         tracer.flush()
     """
@@ -50,16 +60,15 @@ class LangfuseTracer:
     _MAX_ACTIVE_TRACES = 10_000
 
     def __init__(self) -> None:
-        """Initialize the tracer — lazily loads Langfuse SDK."""
         self._enabled: bool = False
-        self._client = None  # Langfuse SDK instance
-        self._traces: Dict[str, Any] = {}  # trace_id -> Langfuse trace object
+        self._client = None          # Langfuse 3.x client
+        # trace_id -> {"root_span": LangfuseSpan, "trace_context": TraceContext}
+        self._traces: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
-
         self._initialize()
 
     def _initialize(self) -> None:
-        """Attempt to initialize Langfuse SDK from environment configuration."""
+        """Attempt to initialize Langfuse 3.x SDK from environment."""
         enabled_str = os.getenv("LANGFUSE_ENABLED", "false").lower()
         if enabled_str not in ("true", "1", "yes"):
             logger.info("Langfuse tracing disabled (LANGFUSE_ENABLED not set to true)")
@@ -67,8 +76,11 @@ class LangfuseTracer:
 
         public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
-        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL (Langfuse SDK convention)
-        host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL (SDK convention)
+        host = (
+            os.getenv("LANGFUSE_HOST")
+            or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        )
 
         if not public_key or not secret_key:
             logger.warning(
@@ -86,11 +98,11 @@ class LangfuseTracer:
                 host=host,
             )
             self._enabled = True
-            logger.info(f"Langfuse tracing initialized | host={host}")
+            logger.info(f"Langfuse 3.x tracing initialized | host={host}")
         except ImportError:
             logger.warning(
                 "langfuse package not installed — tracing disabled. "
-                "Install with: pip install langfuse>=2.0.0"
+                "Install with: pip install langfuse>=3.0.0"
             )
         except Exception as exc:
             logger.warning(f"Langfuse initialization failed — tracing disabled: {exc}")
@@ -102,42 +114,66 @@ class LangfuseTracer:
     def start_trace(
         self,
         name: str,
-        user_id: Optional[str] = None,
-        notebook_id: Optional[str] = None,
+        user_id: str,
+        notebook_id: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Start a new Langfuse trace for a RAG query.
+        """Start a new trace. Returns trace_id (UUID string).
 
-        Args:
-            name: Trace name (e.g. "rag_query").
-            user_id: User UUID for filtering in Langfuse dashboard.
-            notebook_id: Notebook UUID stored in trace metadata.
-            metadata: Additional metadata dict to attach to the trace.
-
-        Returns:
-            A trace_id string (UUID).  Returns a local UUID even when
-            Langfuse is disabled so callers can use it for DB correlation.
+        Creates a root span under a new TraceContext and registers
+        trace metadata (user_id, session_id, tags) via update_current_trace.
+        In disabled mode returns a local UUID (no-op).
         """
-        trace_id = str(uuid4())
+        trace_id = _make_trace_id()
         if not self._enabled or self._client is None:
             return trace_id
 
         try:
-            trace_metadata = {"notebook_id": notebook_id, **(metadata or {})}
-            trace = self._client.trace(
-                id=trace_id,
+            from langfuse.types import TraceContext  # type: ignore[import]
+
+            trace_ctx: TraceContext = {"trace_id": trace_id}
+            full_metadata = {
+                "notebook_id": notebook_id,
+                **(metadata or {}),
+            }
+
+            # start_span returns a LangfuseSpan — store it as root span
+            root_span = self._client.start_span(
+                trace_context=trace_ctx,
                 name=name,
-                user_id=str(user_id) if user_id else None,
-                metadata=trace_metadata,
+                input=full_metadata,
             )
+
+            # Set trace-level attributes (user_id, session, tags)
+            # update_current_trace works when inside an OTEL context.
+            # We use the trace_context to push the right active span first.
+            with self._client.start_as_current_span(
+                trace_context=trace_ctx,
+                name=f"{name}_meta",
+            ):
+                self._client.update_current_trace(
+                    user_id=user_id,
+                    session_id=notebook_id,
+                    tags=["dbnotebook", "rag"],
+                    metadata=full_metadata,
+                )
+
             with self._lock:
                 if len(self._traces) >= self._MAX_ACTIVE_TRACES:
-                    # Evict oldest entry to prevent unbounded growth
                     oldest_key = next(iter(self._traces))
                     self._traces.pop(oldest_key)
-                    logger.debug(f"Evicted oldest trace {oldest_key} from active traces (max={self._MAX_ACTIVE_TRACES})")
-                self._traces[trace_id] = trace
-            logger.debug(f"Langfuse trace started: {trace_id}")
+                    logger.debug(
+                        f"Evicted oldest trace {oldest_key} (max={self._MAX_ACTIVE_TRACES})"
+                    )
+                self._traces[trace_id] = {
+                    "root_span": root_span,
+                    "trace_context": trace_ctx,
+                    "name": name,
+                    "user_id": user_id,
+                    "notebook_id": notebook_id,
+                }
+
+            logger.debug(f"Langfuse trace started: {trace_id} | name={name}")
         except Exception as exc:
             logger.debug(f"Langfuse start_trace failed (non-fatal): {exc}")
 
@@ -147,51 +183,29 @@ class LangfuseTracer:
         self,
         trace_id: str,
         name: str,
-        input_data: Optional[Any] = None,
-        output_data: Optional[Any] = None,
+        input_data: Optional[Dict[str, Any]] = None,
+        output_data: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        timing_ms: Optional[int] = None,
+        timing_ms: Optional[float] = None,
     ) -> None:
-        """Log a named span under an existing trace.
-
-        Args:
-            trace_id: Trace identifier returned by start_trace().
-            name: Span name (e.g. "retrieval", "reranking").
-            input_data: Span input (will be JSON-serialized by Langfuse).
-            output_data: Span output.
-            metadata: Additional metadata.
-            timing_ms: Duration in milliseconds (used to set end_time).
-        """
-        if not self._enabled or self._client is None:
+        """Log a retrieval/processing span under an existing trace."""
+        if not self._enabled or not trace_id:
             return
 
         try:
-            with self._lock:
-                trace = self._traces.get(trace_id)
+            trace_entry = self._traces.get(trace_id)
+            trace_ctx = trace_entry["trace_context"] if trace_entry else {"trace_id": trace_id}
 
-            span_kwargs: Dict[str, Any] = {
-                "name": name,
-                "trace_id": trace_id,
-                "metadata": metadata or {},
-            }
-            if input_data is not None:
-                span_kwargs["input"] = input_data
-            if output_data is not None:
-                span_kwargs["output"] = output_data
-
-            if trace is not None:
-                span = trace.span(**span_kwargs)
-            else:
-                span = self._client.span(**span_kwargs)
-
-            if timing_ms is not None:
-                # Compute end_time from timing_ms so Langfuse shows duration
-                end_time = time.time()
-                start_offset = timing_ms / 1000.0
-                span.update(
-                    end_time=end_time,
-                    start_time=end_time - start_offset,
-                )
+            span = self._client.start_span(
+                trace_context=trace_ctx,
+                name=name,
+                input=input_data,
+                output=output_data,
+                metadata={
+                    **(metadata or {}),
+                    **({"timing_ms": timing_ms} if timing_ms is not None else {}),
+                },
+            )
             span.end()
         except Exception as exc:
             logger.debug(f"Langfuse log_span failed (non-fatal): {exc}")
@@ -200,65 +214,38 @@ class LangfuseTracer:
         self,
         trace_id: str,
         name: str,
-        model: Optional[str] = None,
-        prompt: Optional[str] = None,
-        completion: Optional[str] = None,
+        model: str,
+        prompt: Any,
+        completion: Any,
         usage: Optional[Dict[str, int]] = None,
-        timing_ms: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        timing_ms: Optional[float] = None,
     ) -> None:
-        """Log an LLM generation observation under a trace.
-
-        Args:
-            trace_id: Trace identifier.
-            name: Generation name (e.g. "llm_call").
-            model: Model name for cost tracking in Langfuse.
-            prompt: Full prompt text sent to the LLM.
-            completion: LLM response text.
-            usage: Token usage dict with optional keys:
-                   {"input": int, "output": int, "total": int}.
-            timing_ms: Duration in milliseconds.
-            metadata: Additional metadata.
-        """
-        if not self._enabled or self._client is None:
+        """Log an LLM generation (input/output/tokens) under an existing trace."""
+        if not self._enabled or not trace_id:
             return
 
         try:
-            with self._lock:
-                trace = self._traces.get(trace_id)
+            trace_entry = self._traces.get(trace_id)
+            trace_ctx = trace_entry["trace_context"] if trace_entry else {"trace_id": trace_id}
 
-            gen_kwargs: Dict[str, Any] = {
-                "name": name,
-                "trace_id": trace_id,
-                "metadata": metadata or {},
-            }
-            if model:
-                gen_kwargs["model"] = model
-            if prompt is not None:
-                gen_kwargs["input"] = prompt
-            if completion is not None:
-                gen_kwargs["output"] = completion
+            # Map usage dict to langfuse 3.x usage_details format
+            usage_details: Optional[Dict[str, int]] = None
             if usage:
-                from langfuse.model import ModelUsage  # type: ignore[import]
-                gen_kwargs["usage"] = ModelUsage(
-                    input=usage.get("input", 0),
-                    output=usage.get("output", 0),
-                    total=usage.get("total"),
-                )
+                usage_details = {
+                    "input": usage.get("prompt_tokens", usage.get("input", 0)),
+                    "output": usage.get("completion_tokens", usage.get("output", 0)),
+                }
 
-            if trace is not None:
-                generation = trace.generation(**gen_kwargs)
-            else:
-                generation = self._client.generation(**gen_kwargs)
-
-            if timing_ms is not None:
-                end_time = time.time()
-                start_offset = timing_ms / 1000.0
-                generation.update(
-                    end_time=end_time,
-                    start_time=end_time - start_offset,
-                )
-            generation.end()
+            gen = self._client.start_generation(
+                trace_context=trace_ctx,
+                name=name,
+                model=model,
+                input=prompt,
+                output=completion,
+                usage_details=usage_details,
+                metadata={"timing_ms": timing_ms} if timing_ms is not None else None,
+            )
+            gen.end()
         except Exception as exc:
             logger.debug(f"Langfuse log_generation failed (non-fatal): {exc}")
 
@@ -269,24 +256,16 @@ class LangfuseTracer:
         value: float,
         comment: Optional[str] = None,
     ) -> None:
-        """Attach a numeric score to a trace (e.g. user feedback rating).
-
-        Args:
-            trace_id: Trace identifier.
-            name: Score name (e.g. "user_feedback", "relevance").
-            value: Numeric score value (typically 0.0 – 1.0).
-            comment: Optional human-readable comment.
-        """
-        if not self._enabled or self._client is None:
+        """Attach a numeric score to an existing trace (e.g. user feedback rating)."""
+        if not self._enabled or not trace_id:
             return
 
         try:
-            self._client.score(
+            self._client.create_score(
                 trace_id=trace_id,
                 name=name,
                 value=value,
                 comment=comment,
-                data_type="NUMERIC",
             )
         except Exception as exc:
             logger.debug(f"Langfuse log_score failed (non-fatal): {exc}")
@@ -297,57 +276,52 @@ class LangfuseTracer:
         status: str = "success",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Finalise a trace with status and optional metadata.
-
-        Args:
-            trace_id: Trace identifier.
-            status: "success" | "error" | "partial".
-            metadata: Any final metadata to attach.
-        """
-        if not self._enabled or self._client is None:
+        """End an active trace, close its root span, and clean up."""
+        if not self._enabled or not trace_id:
             return
 
         try:
             with self._lock:
-                trace = self._traces.pop(trace_id, None)
+                entry = self._traces.pop(trace_id, None)
 
-            update_meta = {"status": status, **(metadata or {})}
-            if trace is not None:
-                trace.update(metadata=update_meta)
-            else:
-                # Trace may have been created externally; update by ID
-                self._client.trace(id=trace_id, metadata=update_meta)
+            if entry:
+                root_span = entry["root_span"]
+                root_span.update(
+                    output={
+                        "status": status,
+                        **(metadata or {}),
+                    }
+                )
+                root_span.end()
+                logger.debug(f"Langfuse trace ended: {trace_id} | status={status}")
         except Exception as exc:
             logger.debug(f"Langfuse end_trace failed (non-fatal): {exc}")
 
-    def flush(self) -> None:
-        """Block until all pending Langfuse events have been delivered.
+    def get_trace_url(self, trace_id: str) -> Optional[str]:
+        """Return the Langfuse dashboard URL for a trace."""
+        if not self._enabled or not trace_id:
+            return None
+        try:
+            return self._client.get_trace_url(trace_id=trace_id)
+        except Exception:
+            return None
 
-        Safe to call even when Langfuse is disabled.
-        """
+    def flush(self) -> None:
+        """Block until all buffered events have been sent to Langfuse."""
         if not self._enabled or self._client is None:
             return
-
         try:
             self._client.flush()
-            logger.debug("Langfuse flush complete")
         except Exception as exc:
             logger.debug(f"Langfuse flush failed (non-fatal): {exc}")
 
-    @property
-    def is_enabled(self) -> bool:
-        """True when Langfuse SDK is loaded and configured."""
-        return self._enabled
 
+# ------------------------------------------------------------------
+# Singleton factory
+# ------------------------------------------------------------------
 
 def get_tracer() -> LangfuseTracer:
-    """Return the module-level singleton LangfuseTracer.
-
-    Thread-safe: initialisation happens at most once per process.
-
-    Returns:
-        The singleton LangfuseTracer instance.
-    """
+    """Return the singleton LangfuseTracer, initializing lazily on first call."""
     global _tracer_instance
     if _tracer_instance is None:
         with _tracer_lock:
