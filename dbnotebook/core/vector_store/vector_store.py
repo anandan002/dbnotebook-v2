@@ -5,9 +5,18 @@ from typing import List, Optional, Dict, Any
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.schema import BaseNode
 from llama_index.core.vector_stores import MetadataFilters, MetadataFilter, FilterOperator
-from llama_index.vector_stores.chroma import ChromaVectorStore
 from dotenv import load_dotenv
-import chromadb
+
+# chromadb is optional — PGVectorStore is the primary vector store.
+# These imports are guarded to avoid hard dependency on chromadb.
+try:
+    import chromadb
+    from llama_index.vector_stores.chroma import ChromaVectorStore
+    _CHROMA_AVAILABLE = True
+except ImportError:
+    chromadb = None  # type: ignore
+    ChromaVectorStore = None  # type: ignore
+    _CHROMA_AVAILABLE = False
 
 from ...setting import get_settings, RAGSettings
 
@@ -43,7 +52,11 @@ class LocalVectorStore:
         self._persist_dir = persist_dir or self.DEFAULT_PERSIST_DIR
         self._collection_name = collection_name or self.DEFAULT_COLLECTION_NAME
 
-        # Initialize ChromaDB
+        # Initialize ChromaDB (only if available — legacy code path)
+        if not _CHROMA_AVAILABLE:
+            logger.warning("chromadb not installed — LocalVectorStore is unavailable. Use PGVectorStore.")
+            self._chroma_client = None
+            return
         if persist:
             persist_path = Path(self._persist_dir)
             persist_path.mkdir(parents=True, exist_ok=True)

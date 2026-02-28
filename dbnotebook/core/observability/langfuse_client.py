@@ -9,6 +9,7 @@ Configuration (env vars):
     LANGFUSE_PUBLIC_KEY  — Public key from Langfuse project
     LANGFUSE_SECRET_KEY  — Secret key from Langfuse project
     LANGFUSE_HOST        — Langfuse host (default: https://cloud.langfuse.com)
+                           Also accepts LANGFUSE_BASE_URL as alias
 """
 
 import logging
@@ -66,7 +67,8 @@ class LangfuseTracer:
 
         public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
-        host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL (Langfuse SDK convention)
+        host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
 
         if not public_key or not secret_key:
             logger.warning(
