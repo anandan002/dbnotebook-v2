@@ -27,6 +27,7 @@ from ..api.routes.admin import create_admin_routes
 from ..api.routes.auth import create_auth_routes
 from ..api.routes.settings import create_settings_routes
 from ..api.routes.quiz import create_quiz_routes
+from ..api.routes.feedback import create_feedback_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 from ..core.constants import DEFAULT_USER_ID
@@ -1631,6 +1632,18 @@ Output ONLY valid JSON, nothing else."""
         except Exception as e:
             logger.warning(f"Quiz API routes not available: {e}")
 
+        # Register Feedback API routes (RAG response quality signals)
+        try:
+            create_feedback_routes(
+                self._app,
+                pipeline=self._pipeline,
+                db_manager=self._db_manager,
+                notebook_manager=self._notebook_manager
+            )
+            logger.info("Feedback API routes registered (/api/v2/chat/feedback, /api/v2/feedback-stats)")
+        except Exception as e:
+            logger.warning(f"Feedback API routes not available: {e}")
+
         # === Query Logging & Observability Endpoints ===
 
         @self._app.route("/api/usage-stats", methods=["GET"])
@@ -2036,6 +2049,147 @@ Output ONLY valid JSON, nothing else."""
                 })
             except Exception as e:
                 logger.error(f"Error updating notebook document: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/documents/<source_id>/content", methods=["GET"])
+        def get_document_content(notebook_id, source_id):
+            """Get the full content of a document by reconstructing from chunks."""
+            try:
+                if not self._db_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Database not available"
+                    }), 503
+
+                # Query data_embeddings for all chunks of this document
+                with self._db_manager.get_session() as session:
+                    # Get chunks ordered by chunk_index, filtering by source_id and notebook_id
+                    # Exclude RAPTOR tree nodes (only level 0 chunks)
+                    result = session.execute(
+                        text("""
+                            SELECT text, metadata_
+                            FROM data_embeddings
+                            WHERE metadata_->>'source_id' = :source_id
+                              AND metadata_->>'notebook_id' = :notebook_id
+                              AND (metadata_->>'raptor_level' IS NULL OR metadata_->>'raptor_level' = '0')
+                            ORDER BY COALESCE((metadata_->>'chunk_index')::int, 0)
+                        """),
+                        {"source_id": source_id, "notebook_id": notebook_id}
+                    )
+                    rows = result.fetchall()
+
+                if not rows:
+                    return jsonify({
+                        "success": False,
+                        "error": "Document content not found"
+                    }), 404
+
+                # Reconstruct document content from chunks
+                content_parts = []
+                filename = ""
+                file_type = ""
+
+                for row in rows:
+                    content_parts.append(row.text)
+                    if row.metadata_:
+                        metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
+                        if not filename:
+                            filename = metadata.get('file_name', metadata.get('filename', ''))
+                        if not file_type:
+                            file_type = metadata.get('file_type', '')
+
+                # Join chunks with double newlines for readability
+                full_content = "\n\n".join(content_parts)
+
+                return jsonify({
+                    "success": True,
+                    "content": full_content,
+                    "chunk_count": len(rows),
+                    "filename": filename,
+                    "file_type": file_type
+                })
+
+            except Exception as e:
+                logger.error(f"Error getting document content: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/documents/<source_id>/pdf", methods=["GET"])
+        def get_document_pdf(notebook_id, source_id):
+            """Serve the original PDF file for a document."""
+            try:
+                if not self._db_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Database not available"
+                    }), 503
+
+                # Get the document info from notebook_sources
+                with self._db_manager.get_session() as session:
+                    result = session.execute(
+                        text("""
+                            SELECT filename, file_path
+                            FROM notebook_sources
+                            WHERE source_id = :source_id
+                              AND notebook_id = :notebook_id
+                        """),
+                        {"source_id": source_id, "notebook_id": notebook_id}
+                    )
+                    row = result.fetchone()
+
+                if not row:
+                    return jsonify({
+                        "success": False,
+                        "error": "Document not found"
+                    }), 404
+
+                filename = row.filename
+                file_path = row.file_path
+
+                # Check if it's a PDF
+                if not filename.lower().endswith('.pdf'):
+                    return jsonify({
+                        "success": False,
+                        "error": "Document is not a PDF"
+                    }), 400
+
+                # Try to find the file
+                # First check if file_path is provided and exists
+                if file_path and Path(file_path).exists():
+                    return send_file(
+                        file_path,
+                        mimetype='application/pdf',
+                        as_attachment=False,
+                        download_name=filename
+                    )
+
+                # Try uploads directory
+                upload_path = self._upload_dir / filename
+                if upload_path.exists():
+                    return send_file(
+                        str(upload_path),
+                        mimetype='application/pdf',
+                        as_attachment=False,
+                        download_name=filename
+                    )
+
+                # Try data directory
+                data_path = self._data_dir / filename
+                if data_path.exists():
+                    return send_file(
+                        str(data_path),
+                        mimetype='application/pdf',
+                        as_attachment=False,
+                        download_name=filename
+                    )
+
+                # File not found
+                return jsonify({
+                    "success": False,
+                    "error": "PDF file not found on disk"
+                }), 404
+
+            except Exception as e:
+                logger.error(f"Error serving PDF: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
 
         @self._app.route("/api/notebooks/<notebook_id>/conversations", methods=["GET"])

@@ -23,6 +23,7 @@ from .core.conversation import ConversationStore
 from .core.observability import QueryLogger, get_token_counter
 from .core.transformations import TransformationWorker, TransformationJob
 from .core.raptor import RAPTORWorker, RAPTORJob
+from .core.services.feedback_analyzer_worker import FeedbackAnalyzerWorker
 from .core.memory import SessionMemoryService
 from .core.constants import DEFAULT_USER_ID
 from .core.utils import unwrap_llm
@@ -115,6 +116,7 @@ class LocalRAGPipeline:
         self._query_logger: Optional[QueryLogger] = None
         self._transformation_worker: Optional[TransformationWorker] = None
         self._raptor_worker: Optional[RAPTORWorker] = None
+        self._feedback_analyzer_worker: Optional[FeedbackAnalyzerWorker] = None
         if database_url:
             # Increased pool size for better concurrency under load
             # pool_size=20: 20 persistent connections
@@ -214,6 +216,24 @@ class LocalRAGPipeline:
             logger.info("RAPTORWorker started for hierarchical tree building")
         elif skip_background_workers:
             logger.info("RAPTORWorker disabled (DISABLE_BACKGROUND_WORKERS=true)")
+
+        # Initialize FeedbackAnalyzerWorker (optional, controlled by env var)
+        feedback_analyzer_enabled = os.getenv("FEEDBACK_ANALYZER_ENABLED", "").lower() in ("true", "1", "yes")
+        if self._db_manager and feedback_analyzer_enabled and not skip_background_workers:
+            try:
+                interval = float(os.getenv("FEEDBACK_ANALYZER_INTERVAL", "3600"))
+                self._feedback_analyzer_worker = FeedbackAnalyzerWorker(
+                    db_manager=self._db_manager,
+                    interval=interval,
+                )
+                self._feedback_analyzer_worker.start()
+                logger.info(
+                    f"FeedbackAnalyzerWorker started (interval={interval}s)"
+                )
+            except Exception as fa_err:
+                logger.warning(f"FeedbackAnalyzerWorker failed to start: {fa_err}")
+        else:
+            logger.debug("FeedbackAnalyzerWorker disabled (FEEDBACK_ANALYZER_ENABLED not set)")
 
         logger.info(f"Pipeline initialized - Host: {host}")
         logger.debug(f"LLM Model: {self._model_name or self._settings.ollama.llm}")
@@ -1295,6 +1315,26 @@ class LocalRAGPipeline:
                     max_history=max_history,
                 )
 
+            # Apply adaptive retrieval parameters derived from feedback analysis
+            effective_top_k = max_sources
+            if self._db_manager:
+                try:
+                    from .core.services.parameter_optimizer_service import ParameterOptimizerService
+                    optimizer = ParameterOptimizerService(
+                        pipeline=self,
+                        db_manager=self._db_manager,
+                        notebook_manager=self._notebook_manager,
+                    )
+                    adaptive = optimizer.get_adaptive_settings(notebook_id=notebook_id)
+                    if adaptive and "top_k" in adaptive:
+                        effective_top_k = max(max_sources, adaptive["top_k"])
+                        logger.debug(
+                            f"Adaptive top_k applied: {effective_top_k} "
+                            f"(base={max_sources}) | notebook={notebook_id}"
+                        )
+                except Exception as _oe:
+                    logger.debug(f"Adaptive settings lookup failed (non-fatal): {_oe}")
+
             retrieval_results = []
             if self._engine and self._engine._retriever:
                 retrieval_results = fast_retrieve(
@@ -1304,7 +1344,7 @@ class LocalRAGPipeline:
                     vector_store=self._vector_store,
                     retriever_factory=self._engine._retriever,
                     llm=Settings.llm,
-                    top_k=max_sources,
+                    top_k=effective_top_k,
                 )
 
             raptor_summaries = get_raptor_summaries(

@@ -8,6 +8,7 @@ Endpoint: POST /api/v2/chat
 
 import logging
 import time
+from uuid import uuid4
 from flask import request, jsonify, Response
 
 from llama_index.core import Settings
@@ -27,6 +28,7 @@ from dbnotebook.core.stateless import (
     generate_session_id,
     expand_query_with_history_timed,
 )
+from dbnotebook.core.observability import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
         """
         start_time = time.time()
         timings = {}
+        trace_id: str = ""
+        query_id: str = str(uuid4())
 
         try:
             data = request.json or {}
@@ -133,6 +137,18 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
             used_model = local_llm.model if hasattr(local_llm, 'model') else "unknown"
             logger.info(f"V2 chat: notebook_id={notebook_id}, user_id={user_id}, session_id={session_id}, model={used_model} (requested={model_name})")
+
+            # Start Langfuse trace for this query
+            try:
+                tracer = get_tracer()
+                trace_id = tracer.start_trace(
+                    name="rag_query",
+                    user_id=user_id,
+                    notebook_id=notebook_id,
+                    metadata={"query_id": query_id, "model": used_model, "session_id": session_id},
+                )
+            except Exception as trace_err:
+                logger.debug(f"Tracing start failed (non-fatal): {trace_err}")
 
             # Step 1: Verify notebook exists
             t1 = time.time()
@@ -197,6 +213,23 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     timings["4_enhanced_retrieval_ms"] = int((time.time() - t4) * 1000)
                     retrieval_strategy = retrieval_meta.get("strategy_used", "raptor_aware")
 
+                    # Log retrieval span to Langfuse
+                    try:
+                        tracer = get_tracer()
+                        tracer.log_span(
+                            trace_id=trace_id,
+                            name="enhanced_retrieval",
+                            input_data={"query": retrieval_query, "top_k": top_k},
+                            output_data={
+                                "chunk_count": len(retrieval_results),
+                                "raptor_count": len(raptor_summaries) if raptor_summaries else 0,
+                                "strategy": retrieval_strategy,
+                            },
+                            timing_ms=timings["4_enhanced_retrieval_ms"],
+                        )
+                    except Exception as span_err:
+                        logger.debug(f"Retrieval span logging failed (non-fatal): {span_err}")
+
                     # Add detailed timing breakdown if available
                     if "chunk_retrieval_ms" in retrieval_meta:
                         timings["4a_chunk_retrieval_ms"] = retrieval_meta["chunk_retrieval_ms"]
@@ -243,6 +276,25 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             )
             timings["7_llm_completion_ms"] = int((time.time() - t7) * 1000)
 
+            # Log LLM generation to Langfuse
+            try:
+                tracer = get_tracer()
+                from dbnotebook.core.observability.token_counter import get_token_counter as _gtc
+                _tc = _gtc()
+                _prompt_tok = _tc.count_tokens(query + context)
+                _compl_tok = _tc.count_tokens(response_text)
+                tracer.log_generation(
+                    trace_id=trace_id,
+                    name="llm_generation",
+                    model=used_model,
+                    prompt=query,
+                    completion=response_text[:2000] if response_text else "",
+                    usage={"input": _prompt_tok, "output": _compl_tok, "total": _prompt_tok + _compl_tok},
+                    timing_ms=timings["7_llm_completion_ms"],
+                )
+            except Exception as gen_err:
+                logger.debug(f"Generation logging failed (non-fatal): {gen_err}")
+
             # Step 7b: Log query to QueryLogger for metrics
             if pipeline._query_logger:
                 try:
@@ -286,6 +338,13 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
             logger.info(f"V2 chat completed in {execution_time_ms}ms, {len(sources)} sources, {len(conversation_history)} history turns")
 
+            # End Langfuse trace successfully
+            try:
+                tracer = get_tracer()
+                tracer.end_trace(trace_id, status="success", metadata={"execution_time_ms": execution_time_ms})
+            except Exception as trace_end_err:
+                logger.debug(f"Trace end failed (non-fatal): {trace_end_err}")
+
             return jsonify({
                 "success": True,
                 "response": response_text,
@@ -299,6 +358,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
                     "history_turns_used": len(conversation_history) // 2,
                     "timings": timings,
+                    "trace_id": trace_id,
+                    "query_id": query_id,
                 }
             })
 
@@ -306,6 +367,13 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             logger.error(f"Error in V2 chat endpoint: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            # End trace with error status on failure
+            try:
+                if trace_id:
+                    tracer = get_tracer()
+                    tracer.end_trace(trace_id, status="error", metadata={"error": str(e)})
+            except Exception:
+                pass
             return error_response(str(e), 500)
 
     @app.route("/api/v2/chat/stream", methods=["POST"])
@@ -364,6 +432,20 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             notebook = notebook_manager.get_notebook(notebook_id)
             if not notebook:
                 return not_found("Notebook", notebook_id)
+
+            # Start trace for this streaming request
+            stream_trace_id = ""
+            stream_query_id = str(uuid4())
+            try:
+                tracer = get_tracer()
+                stream_trace_id = tracer.start_trace(
+                    name="rag_query_stream",
+                    user_id=user_id,
+                    notebook_id=notebook_id,
+                    metadata={"query_id": stream_query_id, "model": used_model, "session_id": session_id},
+                )
+            except Exception as strace_err:
+                logger.debug(f"Stream trace start failed (non-fatal): {strace_err}")
 
             def generate():
                 import json
@@ -491,6 +573,17 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     # Calculate total execution time
                     execution_time_ms = int((time_module.time() - start_time) * 1000)
 
+                    # Log stream LLM generation to Langfuse
+                    try:
+                        _tracer = get_tracer()
+                        _tracer.end_trace(
+                            stream_trace_id,
+                            status="success",
+                            metadata={"execution_time_ms": execution_time_ms},
+                        )
+                    except Exception:
+                        pass
+
                     # Build metadata
                     metadata = {
                         "execution_time_ms": execution_time_ms,
@@ -500,6 +593,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
                         "history_turns_used": len(conversation_history) // 2,
                         "timings": timings,
+                        "trace_id": stream_trace_id,
+                        "query_id": stream_query_id,
                     }
 
                     # Send completion signal with metadata
@@ -507,6 +602,11 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
                 except Exception as e:
                     logger.error(f"Streaming error: {e}")
+                    try:
+                        if stream_trace_id:
+                            get_tracer().end_trace(stream_trace_id, status="error", metadata={"error": str(e)})
+                    except Exception:
+                        pass
                     yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
                 finally:
                     # Restore original reranker config if it was overridden

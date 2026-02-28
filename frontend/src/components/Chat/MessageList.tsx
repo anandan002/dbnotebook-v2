@@ -56,6 +56,7 @@ export function MessageList({
             key={message.id}
             message={message}
             onCopy={onCopy}
+            notebookId={notebookId}
           />
         ))}
         <div ref={bottomRef} className="h-4" />
