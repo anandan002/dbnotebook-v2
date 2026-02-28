@@ -1317,20 +1317,41 @@ class LocalRAGPipeline:
 
             # Apply adaptive retrieval parameters derived from feedback analysis
             effective_top_k = max_sources
+            adaptive_sim_threshold: Optional[float] = None
             if self._db_manager:
                 try:
                     from .core.services.parameter_optimizer_service import ParameterOptimizerService
+                    from .setting import QueryTimeSettings
                     optimizer = ParameterOptimizerService(
                         pipeline=self,
                         db_manager=self._db_manager,
                         notebook_manager=self._notebook_manager,
                     )
                     adaptive = optimizer.get_adaptive_settings(notebook_id=notebook_id)
-                    if adaptive and "top_k" in adaptive:
-                        effective_top_k = max(max_sources, adaptive["top_k"])
+                    if adaptive:
+                        if "top_k" in adaptive:
+                            # Use adaptive top_k as the internal retriever similarity_top_k
+                            # so the retriever fetches more candidates, not just slices output
+                            adaptive_top_k = adaptive["top_k"]
+                            effective_top_k = max(max_sources, adaptive_top_k)
+                            # Push the top_k into the retriever via QueryTimeSettings so
+                            # it controls how many candidates are fetched pre-rerank
+                            if self._engine:
+                                current_qs = self._engine._retriever._query_settings
+                                new_qs = QueryTimeSettings(
+                                    similarity_top_k=adaptive_top_k,
+                                    bm25_weight=current_qs.bm25_weight if current_qs else 0.5,
+                                    vector_weight=current_qs.vector_weight if current_qs else 0.5,
+                                    temperature=current_qs.temperature if current_qs else 0.1,
+                                )
+                                self._engine._retriever.set_query_settings(new_qs)
+                                # Bust cache so the new similarity_top_k takes effect
+                                self._engine._retriever._retriever_cache.clear()
+                        if "similarity_threshold" in adaptive:
+                            adaptive_sim_threshold = adaptive["similarity_threshold"]
                         logger.debug(
-                            f"Adaptive top_k applied: {effective_top_k} "
-                            f"(base={max_sources}) | notebook={notebook_id}"
+                            f"Adaptive settings applied: top_k={effective_top_k}, "
+                            f"sim_threshold={adaptive_sim_threshold} | notebook={notebook_id}"
                         )
                 except Exception as _oe:
                     logger.debug(f"Adaptive settings lookup failed (non-fatal): {_oe}")
@@ -1346,6 +1367,17 @@ class LocalRAGPipeline:
                     llm=Settings.llm,
                     top_k=effective_top_k,
                 )
+                # Apply similarity threshold filter from adaptive settings
+                if adaptive_sim_threshold is not None and retrieval_results:
+                    before = len(retrieval_results)
+                    retrieval_results = [
+                        n for n in retrieval_results
+                        if n.score is None or n.score >= adaptive_sim_threshold
+                    ]
+                    logger.debug(
+                        f"Similarity threshold {adaptive_sim_threshold} filtered "
+                        f"{before} → {len(retrieval_results)} nodes"
+                    )
 
             raptor_summaries = get_raptor_summaries(
                 query=message,

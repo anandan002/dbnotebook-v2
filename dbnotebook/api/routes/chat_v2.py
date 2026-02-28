@@ -115,7 +115,22 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             use_reranker = data.get("use_reranker", True)
             reranker_model = data.get("reranker_model")  # xsmall, base, large
             use_raptor = data.get("use_raptor", True)
-            top_k = data.get("top_k", max_sources)  # Allow explicit top_k override
+            top_k_explicit = data.get("top_k")
+            top_k = top_k_explicit if top_k_explicit is not None else max_sources
+
+            # Apply adaptive top_k only when caller has not set one explicitly.
+            if top_k_explicit is None:
+                try:
+                    from dbnotebook.core.services.parameter_optimizer_service import ParameterOptimizerService
+                    _opt = ParameterOptimizerService(
+                        pipeline=pipeline, db_manager=db_manager, notebook_manager=notebook_manager
+                    )
+                    _adap = _opt.get_adaptive_settings(notebook_id=notebook_id)
+                    if _adap and _adap.get("top_k"):
+                        top_k = min(max(top_k, _adap["top_k"]), 20)
+                        logger.info(f"Adaptive top_k={top_k} (feedback-driven default)")
+                except Exception:
+                    pass
 
             # Apply per-request reranker model if specified
             original_reranker_config = None
@@ -188,6 +203,37 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             timings["3_node_cache_ms"] = int((time.time() - t3) * 1000)
             logger.debug(f"Got {len(nodes)} cached nodes for notebook {notebook_id}")
 
+            # Apply adaptive retrieval parameters from feedback self-correction loop
+            adaptive_sim_threshold = None
+            try:
+                from dbnotebook.core.services.parameter_optimizer_service import ParameterOptimizerService
+                from dbnotebook.setting import QueryTimeSettings
+                _optimizer = ParameterOptimizerService(
+                    pipeline=pipeline, db_manager=db_manager, notebook_manager=notebook_manager
+                )
+                _adaptive = _optimizer.get_adaptive_settings(notebook_id=notebook_id)
+                if _adaptive:
+                    if "top_k" in _adaptive:
+                        top_k = max(top_k, _adaptive["top_k"])
+                        # Push new similarity_top_k into retriever so it fetches more pre-rerank
+                        if pipeline._engine and pipeline._engine._retriever:
+                            _retriever = pipeline._engine._retriever
+                            _cur = _retriever._query_settings
+                            _retriever.set_query_settings(QueryTimeSettings(
+                                similarity_top_k=_adaptive["top_k"],
+                                bm25_weight=_cur.bm25_weight if _cur else 0.5,
+                                vector_weight=_cur.vector_weight if _cur else 0.5,
+                                temperature=_cur.temperature if _cur else 0.1,
+                            ))
+                            _retriever._retriever_cache.clear()
+                    if "similarity_threshold" in _adaptive:
+                        adaptive_sim_threshold = _adaptive["similarity_threshold"]
+                    logger.info(
+                        f"Adaptive retrieval: top_k={top_k}, sim_threshold={adaptive_sim_threshold}"
+                    )
+            except Exception as _ae:
+                logger.debug(f"Adaptive settings lookup failed (non-fatal): {_ae}")
+
             # Step 4: Enhanced retrieval with RAPTOR-aware reranking
             retrieval_results = []
             raptor_summaries = []
@@ -238,6 +284,18 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         timings["4b_raptor_retrieval_ms"] = retrieval_meta["raptor_retrieval_ms"]
                     if "reranking_ms" in retrieval_meta:
                         timings["4c_reranking_ms"] = retrieval_meta["reranking_ms"]
+
+                    # Apply adaptive similarity threshold (post-retrieval filter)
+                    if adaptive_sim_threshold is not None and retrieval_results:
+                        before = len(retrieval_results)
+                        retrieval_results = [
+                            n for n in retrieval_results
+                            if n.score is None or n.score >= adaptive_sim_threshold
+                        ]
+                        logger.debug(
+                            f"Adaptive threshold {adaptive_sim_threshold}: "
+                            f"{before} → {len(retrieval_results)} chunks"
+                        )
 
                 except Exception as e:
                     logger.warning(f"Enhanced retrieval failed [{type(e).__name__}]: {e}", exc_info=True)
@@ -406,7 +464,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             use_reranker = data.get("use_reranker", True)
             reranker_model = data.get("reranker_model")  # xsmall, base, large
             use_raptor = data.get("use_raptor", True)
-            top_k = data.get("top_k", max_sources)
+            top_k_explicit = data.get("top_k")
+            top_k = top_k_explicit if top_k_explicit is not None else max_sources
 
             # Apply per-request reranker model if specified
             original_reranker_config = None
@@ -484,6 +543,33 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     t2 = time_module.time()
                     nodes = pipeline._get_cached_nodes(notebook_id)
                     timings["2_node_cache_ms"] = int((time_module.time() - t2) * 1000)
+
+                    # Apply adaptive similarity_top_k — DB query only on notebook switch
+                    if top_k_explicit is None and nodes and pipeline._engine and pipeline._engine._retriever:
+                        _r = pipeline._engine._retriever
+                        _last_nb = getattr(_r, "_adaptive_notebook_id", None)
+                        if _last_nb != notebook_id:
+                            try:
+                                from dbnotebook.core.services.parameter_optimizer_service import ParameterOptimizerService
+                                _opt = ParameterOptimizerService(
+                                    pipeline=pipeline, db_manager=db_manager, notebook_manager=notebook_manager
+                                )
+                                _adap = _opt.get_adaptive_settings(notebook_id=notebook_id)
+                                new_top_k = min(_adap["top_k"], 20) if _adap and _adap.get("top_k") else max_sources
+                            except Exception as e:
+                                logger.debug(f"Adaptive settings lookup failed (non-fatal): {e}")
+                                new_top_k = max_sources
+                            if new_top_k != getattr(_r, "_adaptive_top_k", max_sources):
+                                if _r._query_settings:
+                                    _r._query_settings.similarity_top_k = new_top_k
+                                _r._setting.retriever.top_k_rerank = new_top_k
+                                _r._retriever_cache.clear()
+                                logger.info(f"similarity_top_k={new_top_k}, top_k_rerank={new_top_k} applied for notebook {notebook_id}")
+                            _r._adaptive_notebook_id = notebook_id
+                            _r._adaptive_top_k = new_top_k
+                            top_k = new_top_k
+                        else:
+                            top_k = getattr(_r, "_adaptive_top_k", max_sources)
 
                     retrieval_results = []
                     raptor_summaries = []

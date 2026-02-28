@@ -213,9 +213,26 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
             # Reranker config overrides (per-request, for benchmarking)
             reranker_enabled = data.get("reranker_enabled")  # None means use global setting
             reranker_model = data.get("reranker_model")  # None means use global setting
-            top_k = data.get("top_k")  # None means use default
+            top_k_explicit = data.get("top_k")  # None means use default
+            top_k = top_k_explicit  # Start with explicit value (may be None)
             skip_raptor = data.get("skip_raptor", True)  # Default True: RAPTOR summaries can dilute precision for specific queries
             response_format = data.get("response_format", "default")  # default|detailed|analytical|brief
+
+            # Apply adaptive top_k only when caller has not set one explicitly.
+            if top_k_explicit is None:
+                try:
+                    from dbnotebook.core.services.parameter_optimizer_service import ParameterOptimizerService
+                    _opt = ParameterOptimizerService(
+                        pipeline=pipeline, db_manager=db_manager, notebook_manager=notebook_manager
+                    )
+                    _adap = _opt.get_adaptive_settings(notebook_id=notebook_id)
+                    if _adap and _adap.get("top_k"):
+                        adaptive_top_k = min(max(_adap["top_k"], max_sources), 20)
+                        max_sources = adaptive_top_k
+                        top_k = adaptive_top_k
+                        logger.info(f"Adaptive top_k={top_k} applied to /api/query (feedback-driven default)")
+                except Exception:
+                    pass
 
             # Get LLM instance for this specific request
             from dbnotebook.core.model.model import LocalRAGModel
