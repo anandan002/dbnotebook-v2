@@ -3072,3 +3072,54 @@ body.printing-dashboard .main-content {
     display: none !important;
   }
 }
+
+/* ============================================
+   React-PDF Styles
+   ============================================ */
+
+.react-pdf__Page {
+  margin-bottom: 1rem;
+  background: white;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.react-pdf__Page__canvas {
+  display: block !important;
+  margin: 0 auto;
+}
+
+.react-pdf__Page__textContent {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 0.5;
+  line-height: 1;
+}
+
+.react-pdf__Page__textContent span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0 0;
+}
+
+.react-pdf__Page__textContent::selection,
+.react-pdf__Page__textContent span::selection {
+  background: var(--color-glow-subtle);
+}
+
+.react-pdf__Page__annotations {
+  position: absolute;
+  inset: 0;
+}
+
+.react-pdf__Page__annotations a {
+  position: absolute;
+  cursor: pointer;
+}
+
+/* Hide annotation layer content */
+.react-pdf__Page__annotations section {
+  position: absolute;
+}

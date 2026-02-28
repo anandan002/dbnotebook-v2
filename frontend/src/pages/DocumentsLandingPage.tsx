@@ -1,12 +1,13 @@
 /**
  * Documents Landing Page
  *
- * Two-panel layout for document and notebook management:
+ * Three-panel layout for document and notebook management:
  * - Left panel: Notebook list with search and create
- * - Right panel: Selected notebook's documents with full CRUD
+ * - Middle panel: Selected notebook's documents with full CRUD
+ * - Right panel: Document preview with markdown/PDF rendering (resizable)
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Search,
   Plus,
@@ -19,8 +20,14 @@ import {
   Upload,
   Loader2,
   Globe,
-  ChevronRight
+  ChevronRight,
+  Eye,
+  XCircle,
+  GripVertical
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Document, Page, pdfjs } from 'react-pdf';
 import { Header } from '../components/Header';
 import { MainLayout } from '../components/Layout';
 import { useNotebook } from '../contexts';
@@ -28,7 +35,67 @@ import { useNotebooks } from '../hooks/useNotebooks';
 import { useToast } from '../hooks/useToast';
 import { ToastContainer } from '../components/ui';
 import { WebSearchPanel } from '../components/Sidebar/WebSearchPanel';
-import type { Notebook, Document } from '../types';
+import { getDocumentContent } from '../services/api';
+import type { Notebook, Document as DocType } from '../types';
+
+// Set up PDF.js worker
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+
+// Custom Markdown components for styling
+const MarkdownComponents = {
+  h1: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h1 className="text-2xl font-bold text-text mt-6 mb-4 pb-2 border-b border-void-lighter" {...props}>{children}</h1>
+  ),
+  h2: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h2 className="text-xl font-semibold text-text mt-5 mb-3" {...props}>{children}</h2>
+  ),
+  h3: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h3 className="text-lg font-medium text-text mt-4 mb-2" {...props}>{children}</h3>
+  ),
+  p: ({ children, ...props }: React.HTMLAttributes<HTMLParagraphElement>) => (
+    <p className="text-text-muted leading-relaxed mb-4" {...props}>{children}</p>
+  ),
+  ul: ({ children, ...props }: React.HTMLAttributes<HTMLUListElement>) => (
+    <ul className="list-disc list-inside text-text-muted mb-4 space-y-1" {...props}>{children}</ul>
+  ),
+  ol: ({ children, ...props }: React.HTMLAttributes<HTMLOListElement>) => (
+    <ol className="list-decimal list-inside text-text-muted mb-4 space-y-1" {...props}>{children}</ol>
+  ),
+  li: ({ children, ...props }: React.HTMLAttributes<HTMLLIElement>) => (
+    <li className="text-text-muted" {...props}>{children}</li>
+  ),
+  blockquote: ({ children, ...props }: React.HTMLAttributes<HTMLQuoteElement>) => (
+    <blockquote className="border-l-4 border-glow/50 pl-4 italic text-text-dim my-4" {...props}>{children}</blockquote>
+  ),
+  code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement>) => {
+    const isInline = !className;
+    if (isInline) {
+      return <code className="bg-void-surface px-1.5 py-0.5 rounded text-sm text-nebula font-mono" {...props}>{children}</code>;
+    }
+    return (
+      <code className="block bg-void-surface p-4 rounded-lg text-sm overflow-x-auto font-mono text-text-muted" {...props}>
+        {children}
+      </code>
+    );
+  },
+  pre: ({ children, ...props }: React.HTMLAttributes<HTMLPreElement>) => (
+    <pre className="bg-void-surface p-4 rounded-lg overflow-x-auto mb-4" {...props}>{children}</pre>
+  ),
+  a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} className="text-glow hover:underline" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+  ),
+  table: ({ children, ...props }: React.HTMLAttributes<HTMLTableElement>) => (
+    <div className="overflow-x-auto mb-4">
+      <table className="min-w-full border border-void-lighter" {...props}>{children}</table>
+    </div>
+  ),
+  th: ({ children, ...props }: React.HTMLAttributes<HTMLTableCellElement>) => (
+    <th className="border border-void-lighter bg-void-surface px-4 py-2 text-left text-text font-medium" {...props}>{children}</th>
+  ),
+  td: ({ children, ...props }: React.HTMLAttributes<HTMLTableCellElement>) => (
+    <td className="border border-void-lighter px-4 py-2 text-text-muted" {...props}>{children}</td>
+  ),
+};
 
 export function DocumentsLandingPage() {
   const { notebooks } = useNotebook();
@@ -56,6 +123,21 @@ export function DocumentsLandingPage() {
   const [showWebSearch, setShowWebSearch] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
+  // Preview state
+  const [previewDoc, setPreviewDoc] = useState<DocType | null>(null);
+  const [previewContent, setPreviewContent] = useState<string>('');
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  // Resizable panel state
+  const [previewWidth, setPreviewWidth] = useState(500);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef<HTMLDivElement>(null);
+
+  // PDF state
+  const [numPages, setNumPages] = useState<number | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
   // Filter notebooks by search
   const filteredNotebooks = useMemo(() => {
     if (!searchQuery.trim()) return notebooks;
@@ -64,6 +146,90 @@ export function DocumentsLandingPage() {
       nb.name.toLowerCase().includes(query)
     );
   }, [notebooks, searchQuery]);
+
+  // Load preview content when previewDoc changes
+  useEffect(() => {
+    if (!previewDoc || !selectedNotebook) {
+      setPreviewContent('');
+      setPreviewError(null);
+      return;
+    }
+
+    const loadContent = async () => {
+      setIsLoadingPreview(true);
+      setPreviewError(null);
+      setPdfError(null);
+
+      try {
+        const result = await getDocumentContent(selectedNotebook.id, previewDoc.source_id);
+        setPreviewContent(result.content);
+      } catch (err) {
+        console.error('Failed to load document content:', err);
+        setPreviewError('Failed to load document content');
+        setPreviewContent('');
+      } finally {
+        setIsLoadingPreview(false);
+      }
+    };
+
+    loadContent();
+  }, [previewDoc, selectedNotebook]);
+
+  // Clear preview when notebook changes
+  useEffect(() => {
+    setPreviewDoc(null);
+    setPreviewContent('');
+    setPreviewError(null);
+  }, [selectedNotebook?.id]);
+
+  // Resizable panel handlers
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+
+      const containerWidth = window.innerWidth;
+      const newWidth = containerWidth - e.clientX;
+
+      // Constrain between 300px and 60% of window
+      const minWidth = 300;
+      const maxWidth = containerWidth * 0.6;
+      setPreviewWidth(Math.max(minWidth, Math.min(maxWidth, newWidth)));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
+  // PDF handlers
+  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
+    setNumPages(numPages);
+    setPdfError(null);
+  };
+
+  const onDocumentLoadError = (error: Error) => {
+    console.error('PDF load error:', error);
+    setPdfError('Failed to load PDF. Displaying text content instead.');
+  };
 
   // Notebook CRUD handlers
   const handleCreateNotebook = async () => {
@@ -133,18 +299,21 @@ export function DocumentsLandingPage() {
     e.target.value = '';
   };
 
-  const handleDeleteDocument = async (doc: Document) => {
+  const handleDeleteDocument = async (doc: DocType) => {
     if (!window.confirm(`Remove "${doc.filename}"?`)) return;
 
     const result = await deleteDocument(doc.source_id);
     if (result) {
       success('Document removed');
+      if (previewDoc?.source_id === doc.source_id) {
+        setPreviewDoc(null);
+      }
     } else {
       showError('Failed to remove document');
     }
   };
 
-  const handleToggleDocument = async (doc: Document) => {
+  const handleToggleDocument = async (doc: DocType) => {
     const result = await toggleDocumentActive(doc.source_id, !(doc.active !== false));
     if (!result) {
       showError('Failed to update document');
@@ -162,6 +331,108 @@ export function DocumentsLandingPage() {
   const startEditing = (notebook: Notebook) => {
     setEditingNotebookId(notebook.id);
     setEditingName(notebook.name);
+  };
+
+  const handleDocumentClick = (doc: DocType) => {
+    if (previewDoc?.source_id === doc.source_id) {
+      // Toggle off if same doc
+      setPreviewDoc(null);
+    } else {
+      setPreviewDoc(doc);
+    }
+  };
+
+  const isPdfFile = (filename: string) => {
+    return filename.toLowerCase().endsWith('.pdf');
+  };
+
+  // Render preview content based on file type
+  const renderPreviewContent = () => {
+    if (isLoadingPreview) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <Loader2 className="w-8 h-8 animate-spin text-glow" />
+        </div>
+      );
+    }
+
+    if (previewError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-center p-8">
+          <XCircle className="w-12 h-12 text-danger mb-4" />
+          <p className="text-text-muted">{previewError}</p>
+        </div>
+      );
+    }
+
+    if (!previewContent) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-center p-8">
+          <FileText className="w-12 h-12 text-text-dim mb-4" />
+          <p className="text-text-muted">No content to display</p>
+        </div>
+      );
+    }
+
+    // Check if it's a PDF
+    if (previewDoc && isPdfFile(previewDoc.filename)) {
+      // For PDFs, we try to render with react-pdf, but also show text content as fallback
+      return (
+        <div className="h-full overflow-y-auto">
+          {pdfError ? (
+            // Fallback to text content
+            <div className="p-6">
+              <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-400 text-sm">
+                {pdfError}
+              </div>
+              <div className="prose prose-invert max-w-none">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                  {previewContent}
+                </ReactMarkdown>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4">
+              <Document
+                file={`/api/notebooks/${selectedNotebook?.id}/documents/${previewDoc.source_id}/pdf`}
+                onLoadSuccess={onDocumentLoadSuccess}
+                onLoadError={onDocumentLoadError}
+                loading={
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-glow" />
+                  </div>
+                }
+              >
+                {numPages && Array.from(new Array(numPages), (_, index) => (
+                  <Page
+                    key={`page_${index + 1}`}
+                    pageNumber={index + 1}
+                    className="mb-4 shadow-lg"
+                    width={previewWidth - 48}
+                  />
+                ))}
+              </Document>
+              {numPages && (
+                <div className="text-center text-text-dim text-sm mt-4">
+                  {numPages} page{numPages !== 1 ? 's' : ''}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // For non-PDF files, render as markdown
+    return (
+      <div className="p-6 overflow-y-auto h-full">
+        <div className="prose prose-invert max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+            {previewContent}
+          </ReactMarkdown>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -331,8 +602,8 @@ export function DocumentsLandingPage() {
           </div>
         </div>
 
-        {/* Right Panel - Document Management */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Middle Panel - Document Management */}
+        <div className={`flex-1 flex flex-col overflow-hidden ${previewDoc ? '' : ''}`}>
           {!selectedNotebook ? (
             // No notebook selected
             <div className="flex-1 flex items-center justify-center">
@@ -448,20 +719,30 @@ export function DocumentsLandingPage() {
                     {documents.map((doc) => (
                       <div
                         key={doc.source_id}
+                        onClick={() => handleDocumentClick(doc)}
                         className={`
-                          flex items-center gap-4 p-4 rounded-lg border transition-all
-                          ${doc.active !== false
-                            ? 'bg-void-surface border-void-lighter'
-                            : 'bg-void-light border-void-lighter opacity-60'
+                          flex items-center gap-4 p-4 rounded-lg border transition-all cursor-pointer
+                          ${previewDoc?.source_id === doc.source_id
+                            ? 'bg-nebula/10 border-nebula/30'
+                            : doc.active !== false
+                              ? 'bg-void-surface border-void-lighter hover:border-void-light'
+                              : 'bg-void-light border-void-lighter opacity-60 hover:border-void-light'
                           }
                         `}
                       >
                         {/* File icon */}
                         <div className={`
                           w-10 h-10 rounded-lg flex items-center justify-center
-                          ${doc.active !== false ? 'bg-nebula/10' : 'bg-void-lighter'}
+                          ${previewDoc?.source_id === doc.source_id
+                            ? 'bg-nebula/20'
+                            : doc.active !== false ? 'bg-nebula/10' : 'bg-void-lighter'
+                          }
                         `}>
-                          <FileText className={`w-5 h-5 ${doc.active !== false ? 'text-nebula' : 'text-text-dim'}`} />
+                          <FileText className={`w-5 h-5 ${
+                            previewDoc?.source_id === doc.source_id
+                              ? 'text-nebula'
+                              : doc.active !== false ? 'text-nebula' : 'text-text-dim'
+                          }`} />
                         </div>
 
                         {/* File info */}
@@ -476,7 +757,25 @@ export function DocumentsLandingPage() {
                         </div>
 
                         {/* Actions */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          {/* Preview button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDocumentClick(doc);
+                            }}
+                            className={`
+                              p-2 rounded-lg transition-colors
+                              ${previewDoc?.source_id === doc.source_id
+                                ? 'bg-nebula/20 text-nebula'
+                                : 'text-text-dim hover:text-nebula hover:bg-nebula/10'
+                              }
+                            `}
+                            title="Preview document"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
                           {/* Toggle active */}
                           <button
                             onClick={() => handleToggleDocument(doc)}
@@ -508,6 +807,59 @@ export function DocumentsLandingPage() {
             </>
           )}
         </div>
+
+        {/* Preview Panel - Resizable */}
+        {previewDoc && (
+          <>
+            {/* Resize handle */}
+            <div
+              ref={resizeRef}
+              onMouseDown={handleMouseDown}
+              className={`
+                w-1 cursor-col-resize flex items-center justify-center
+                bg-void-lighter hover:bg-glow/30 transition-colors
+                ${isResizing ? 'bg-glow/50' : ''}
+              `}
+            >
+              <GripVertical className="w-3 h-3 text-text-dim" />
+            </div>
+
+            {/* Preview content */}
+            <div
+              className="flex flex-col bg-void-light border-l border-void-lighter overflow-hidden"
+              style={{ width: previewWidth }}
+            >
+              {/* Preview header */}
+              <div className="p-4 border-b border-void-lighter flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-nebula/10 flex items-center justify-center shrink-0">
+                    <FileText className="w-4 h-4 text-nebula" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium text-text truncate">
+                      {previewDoc.filename}
+                    </h3>
+                    <p className="text-xs text-text-dim">
+                      {previewDoc.file_type || 'Document'} Preview
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setPreviewDoc(null)}
+                  className="p-2 text-text-dim hover:text-text hover:bg-void-surface rounded-lg transition-colors"
+                  title="Close preview"
+                >
+                  <XCircle className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Preview content area */}
+              <div className="flex-1 overflow-hidden">
+                {renderPreviewContent()}
+              </div>
+            </div>
+          </>
+        )}
       </div>
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </MainLayout>

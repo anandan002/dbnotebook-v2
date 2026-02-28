@@ -116,13 +116,14 @@ class LangfuseTracer:
         name: str,
         user_id: str,
         notebook_id: str,
+        query: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Start a new trace. Returns trace_id (UUID string).
+        """Start a new trace. Returns trace_id (32 lowercase hex chars).
 
-        Creates a root span under a new TraceContext and registers
-        trace metadata (user_id, session_id, tags) via update_current_trace.
-        In disabled mode returns a local UUID (no-op).
+        Creates a root span under a new TraceContext.  The span input
+        includes the user query so it appears in the Langfuse UI.
+        In disabled mode returns a local trace-ID (no-op).
         """
         trace_id = _make_trace_id()
         if not self._enabled or self._client is None:
@@ -132,31 +133,22 @@ class LangfuseTracer:
             from langfuse.types import TraceContext  # type: ignore[import]
 
             trace_ctx: TraceContext = {"trace_id": trace_id}
-            full_metadata = {
+            input_data: Dict[str, Any] = {
+                "user_id": user_id,
                 "notebook_id": notebook_id,
+                **({"query": query} if query else {}),
                 **(metadata or {}),
             }
 
-            # start_span returns a LangfuseSpan — store it as root span
+            # Single root span — its input shows the query in the UI.
+            # Avoid start_as_current_span here; it creates a confusing
+            # extra "_meta" span and relies on OTEL context propagation
+            # which is unreliable inside generator functions.
             root_span = self._client.start_span(
                 trace_context=trace_ctx,
                 name=name,
-                input=full_metadata,
+                input=input_data,
             )
-
-            # Set trace-level attributes (user_id, session, tags)
-            # update_current_trace works when inside an OTEL context.
-            # We use the trace_context to push the right active span first.
-            with self._client.start_as_current_span(
-                trace_context=trace_ctx,
-                name=f"{name}_meta",
-            ):
-                self._client.update_current_trace(
-                    user_id=user_id,
-                    session_id=notebook_id,
-                    tags=["dbnotebook", "rag"],
-                    metadata=full_metadata,
-                )
 
             with self._lock:
                 if len(self._traces) >= self._MAX_ACTIVE_TRACES:
@@ -274,9 +266,17 @@ class LangfuseTracer:
         self,
         trace_id: str,
         status: str = "success",
+        response: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """End an active trace, close its root span, and clean up."""
+        """End an active trace, close its root span, and async-flush to Langfuse.
+
+        Args:
+            trace_id:  Trace ID returned by start_trace.
+            status:    \"success\" or \"error\".
+            response:  The final LLM response text (shown as output in UI).
+            metadata:  Extra key-value pairs appended to the output object.
+        """
         if not self._enabled or not trace_id:
             return
 
@@ -286,16 +286,27 @@ class LangfuseTracer:
 
             if entry:
                 root_span = entry["root_span"]
-                root_span.update(
-                    output={
-                        "status": status,
-                        **(metadata or {}),
-                    }
-                )
+                output: Dict[str, Any] = {"status": status}
+                if response is not None:
+                    output["response"] = response
+                if metadata:
+                    output.update(metadata)
+                root_span.update(output=output)
                 root_span.end()
                 logger.debug(f"Langfuse trace ended: {trace_id} | status={status}")
+
+            # Flush asynchronously so spans appear in Langfuse immediately
+            # without blocking the HTTP response to the client.
+            threading.Thread(target=self._async_flush, daemon=True).start()
         except Exception as exc:
             logger.debug(f"Langfuse end_trace failed (non-fatal): {exc}")
+
+    def _async_flush(self) -> None:
+        """Background flush — called after each trace ends."""
+        try:
+            self._client.flush()
+        except Exception:
+            pass
 
     def get_trace_url(self, trace_id: str) -> Optional[str]:
         """Return the Langfuse dashboard URL for a trace."""

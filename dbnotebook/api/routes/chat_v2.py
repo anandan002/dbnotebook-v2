@@ -145,6 +145,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     name="rag_query",
                     user_id=user_id,
                     notebook_id=notebook_id,
+                    query=query,
                     metadata={"query_id": query_id, "model": used_model, "session_id": session_id},
                 )
             except Exception as trace_err:
@@ -341,7 +342,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             # End Langfuse trace successfully
             try:
                 tracer = get_tracer()
-                tracer.end_trace(trace_id, status="success", metadata={"execution_time_ms": execution_time_ms})
+                tracer.end_trace(trace_id, status="success", response=response_text, metadata={"execution_time_ms": execution_time_ms})
             except Exception as trace_end_err:
                 logger.debug(f"Trace end failed (non-fatal): {trace_end_err}")
 
@@ -442,6 +443,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     name="rag_query_stream",
                     user_id=user_id,
                     notebook_id=notebook_id,
+                    query=query,
                     metadata={"query_id": stream_query_id, "model": used_model, "session_id": session_id},
                 )
             except Exception as strace_err:
@@ -573,12 +575,13 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     # Calculate total execution time
                     execution_time_ms = int((time_module.time() - start_time) * 1000)
 
-                    # Log stream LLM generation to Langfuse
+                    # End Langfuse trace — pass response text so it shows in UI output
                     try:
                         _tracer = get_tracer()
                         _tracer.end_trace(
                             stream_trace_id,
                             status="success",
+                            response=response_text,
                             metadata={"execution_time_ms": execution_time_ms},
                         )
                     except Exception:
