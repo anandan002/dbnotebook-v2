@@ -46,3 +46,41 @@ External SDK integration (Langfuse via c7) + architectural feedback loop design 
 3. Set LANGFUSE_* env vars from Langfuse dashboard
 4. Set LANGFUSE_ENABLED=true, FEEDBACK_ANALYZER_ENABLED=true
 5. Restart app — worker starts automatically
+
+---
+
+## Follow-up Fix Session — 2026-02-28 (continuation)
+
+**Commit**: 195c0fa fix(rag): fix adaptive top_k flowing through full retrieval pipeline
+
+### Problem
+After the feedback loop wrote `top_k=17` to `rag_adaptive_settings` for the Daaji notebook,
+the streaming endpoint still returned only ~5-6 chunks. `similarity_top_k=17` was applied to
+the retriever's candidate fetch, but `TwoStageRetriever._retrieve()` had a hidden second
+reranker that silently capped output at `top_k_rerank=10` (the global default).
+
+### Root Cause
+Two-stage reranking pipeline in `LocalRetriever`:
+1. `TwoStageRetriever._retrieve()` → internal reranker with `top_n=_setting.retriever.top_k_rerank=10` ← bottleneck
+2. `RetrievalService._apply_reranking()` → external reranker (correct, already used adaptive top_k)
+
+Setting `similarity_top_k=17` increased candidate fetch but chunks were capped to 10 before
+leaving `fast_retrieve`, resulting in ~5 final chunks after RAPTOR competition.
+
+### Fix
+One line added to adaptive block in `dbnotebook/api/routes/chat_v2.py`:
+```python
+_r._setting.retriever.top_k_rerank = new_top_k  # was missing — the hidden cap
+```
+`_r._setting` is the global `RAGSettings` singleton (mutable Pydantic, `@lru_cache`),
+so the assignment affects the next `TwoStageRetriever` built after `_retriever_cache.clear()`.
+
+### Verification
+```
+similarity_top_k=17, top_k_rerank=17 applied for notebook 62fbdf19...
+Retrieval: 17 chunks, 5 RAPTOR summaries, strategy=raptor_aware, reranker=True, time=11425ms
+```
+
+### Note
+Daaji chakra coverage (all 7 chakras in one response) accepted as LLM generation outlier,
+not a retrieval issue. Retrieval is now correct at 17 chunks.
