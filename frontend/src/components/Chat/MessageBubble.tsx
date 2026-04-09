@@ -4,15 +4,18 @@ import remarkGfm from 'remark-gfm';
 import { User, Bot, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Message, SourceCitation } from '../../types';
 import { TimingBreakdown, V2_CHAT_STREAM_STAGES } from '../shared/TimingBreakdown';
+import { FeedbackWidget } from './FeedbackWidget';
 
 interface MessageBubbleProps {
   message: Message;
   onCopy?: (content: string) => void;
+  notebookId?: string;
 }
 
 export const MessageBubble = memo(function MessageBubble({
   message,
   onCopy,
+  notebookId,
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
@@ -224,6 +227,20 @@ export const MessageBubble = memo(function MessageBubble({
             />
           </div>
         )}
+
+        {/* Feedback widget — only for completed assistant messages with tracing enabled */}
+        {!isUser &&
+          !message.isStreaming &&
+          message.content &&
+          message.metadata?.trace_id &&
+          message.metadata?.query_id &&
+          notebookId && (
+            <FeedbackWidget
+              traceId={message.metadata.trace_id}
+              queryId={message.metadata.query_id}
+              notebookId={notebookId}
+            />
+          )}
 
         {/* Streaming indicator */}
         {message.isStreaming && message.content && (

@@ -19,6 +19,9 @@ export interface MessageMetadata {
     confidence: number;
     selected_documents?: string[];
   };
+  // Langfuse observability correlation IDs (present when tracing is enabled)
+  trace_id?: string;
+  query_id?: string;
 }
 
 // Chat types
@@ -140,6 +143,9 @@ export interface ChatV2Response {
     raptor_summaries_used: number;
     history_turns_used: number;
     timings: Record<string, number>;
+    // Langfuse correlation IDs — present when LANGFUSE_ENABLED=true
+    trace_id?: string;
+    query_id?: string;
   };
 }
 

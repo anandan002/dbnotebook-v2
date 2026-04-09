@@ -8,6 +8,7 @@ Endpoint: POST /api/v2/chat
 
 import logging
 import time
+from uuid import uuid4
 from flask import request, jsonify, Response
 
 from llama_index.core import Settings
@@ -27,6 +28,7 @@ from dbnotebook.core.stateless import (
     generate_session_id,
     expand_query_with_history_timed,
 )
+from dbnotebook.core.observability import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
         """
         start_time = time.time()
         timings = {}
+        trace_id: str = ""
+        query_id: str = str(uuid4())
 
         try:
             data = request.json or {}
@@ -111,7 +115,22 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             use_reranker = data.get("use_reranker", True)
             reranker_model = data.get("reranker_model")  # xsmall, base, large
             use_raptor = data.get("use_raptor", True)
-            top_k = data.get("top_k", max_sources)  # Allow explicit top_k override
+            top_k_explicit = data.get("top_k")
+            top_k = top_k_explicit if top_k_explicit is not None else max_sources
+
+            # Apply adaptive top_k only when caller has not set one explicitly.
+            if top_k_explicit is None:
+                try:
+                    from dbnotebook.core.services.parameter_optimizer_service import ParameterOptimizerService
+                    _opt = ParameterOptimizerService(
+                        pipeline=pipeline, db_manager=db_manager, notebook_manager=notebook_manager
+                    )
+                    _adap = _opt.get_adaptive_settings(notebook_id=notebook_id)
+                    if _adap and _adap.get("top_k"):
+                        top_k = min(max(top_k, _adap["top_k"]), 20)
+                        logger.info(f"Adaptive top_k={top_k} (feedback-driven default)")
+                except Exception:
+                    pass
 
             # Apply per-request reranker model if specified
             original_reranker_config = None
@@ -133,6 +152,19 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
             used_model = local_llm.model if hasattr(local_llm, 'model') else "unknown"
             logger.info(f"V2 chat: notebook_id={notebook_id}, user_id={user_id}, session_id={session_id}, model={used_model} (requested={model_name})")
+
+            # Start Langfuse trace for this query
+            try:
+                tracer = get_tracer()
+                trace_id = tracer.start_trace(
+                    name="rag_query",
+                    user_id=user_id,
+                    notebook_id=notebook_id,
+                    query=query,
+                    metadata={"query_id": query_id, "model": used_model, "session_id": session_id},
+                )
+            except Exception as trace_err:
+                logger.debug(f"Tracing start failed (non-fatal): {trace_err}")
 
             # Step 1: Verify notebook exists
             t1 = time.time()
@@ -171,6 +203,37 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             timings["3_node_cache_ms"] = int((time.time() - t3) * 1000)
             logger.debug(f"Got {len(nodes)} cached nodes for notebook {notebook_id}")
 
+            # Apply adaptive retrieval parameters from feedback self-correction loop
+            adaptive_sim_threshold = None
+            try:
+                from dbnotebook.core.services.parameter_optimizer_service import ParameterOptimizerService
+                from dbnotebook.setting import QueryTimeSettings
+                _optimizer = ParameterOptimizerService(
+                    pipeline=pipeline, db_manager=db_manager, notebook_manager=notebook_manager
+                )
+                _adaptive = _optimizer.get_adaptive_settings(notebook_id=notebook_id)
+                if _adaptive:
+                    if "top_k" in _adaptive:
+                        top_k = max(top_k, _adaptive["top_k"])
+                        # Push new similarity_top_k into retriever so it fetches more pre-rerank
+                        if pipeline._engine and pipeline._engine._retriever:
+                            _retriever = pipeline._engine._retriever
+                            _cur = _retriever._query_settings
+                            _retriever.set_query_settings(QueryTimeSettings(
+                                similarity_top_k=_adaptive["top_k"],
+                                bm25_weight=_cur.bm25_weight if _cur else 0.5,
+                                vector_weight=_cur.vector_weight if _cur else 0.5,
+                                temperature=_cur.temperature if _cur else 0.1,
+                            ))
+                            _retriever._retriever_cache.clear()
+                    if "similarity_threshold" in _adaptive:
+                        adaptive_sim_threshold = _adaptive["similarity_threshold"]
+                    logger.info(
+                        f"Adaptive retrieval: top_k={top_k}, sim_threshold={adaptive_sim_threshold}"
+                    )
+            except Exception as _ae:
+                logger.debug(f"Adaptive settings lookup failed (non-fatal): {_ae}")
+
             # Step 4: Enhanced retrieval with RAPTOR-aware reranking
             retrieval_results = []
             raptor_summaries = []
@@ -197,6 +260,23 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     timings["4_enhanced_retrieval_ms"] = int((time.time() - t4) * 1000)
                     retrieval_strategy = retrieval_meta.get("strategy_used", "raptor_aware")
 
+                    # Log retrieval span to Langfuse
+                    try:
+                        tracer = get_tracer()
+                        tracer.log_span(
+                            trace_id=trace_id,
+                            name="enhanced_retrieval",
+                            input_data={"query": retrieval_query, "top_k": top_k},
+                            output_data={
+                                "chunk_count": len(retrieval_results),
+                                "raptor_count": len(raptor_summaries) if raptor_summaries else 0,
+                                "strategy": retrieval_strategy,
+                            },
+                            timing_ms=timings["4_enhanced_retrieval_ms"],
+                        )
+                    except Exception as span_err:
+                        logger.debug(f"Retrieval span logging failed (non-fatal): {span_err}")
+
                     # Add detailed timing breakdown if available
                     if "chunk_retrieval_ms" in retrieval_meta:
                         timings["4a_chunk_retrieval_ms"] = retrieval_meta["chunk_retrieval_ms"]
@@ -204,6 +284,18 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         timings["4b_raptor_retrieval_ms"] = retrieval_meta["raptor_retrieval_ms"]
                     if "reranking_ms" in retrieval_meta:
                         timings["4c_reranking_ms"] = retrieval_meta["reranking_ms"]
+
+                    # Apply adaptive similarity threshold (post-retrieval filter)
+                    if adaptive_sim_threshold is not None and retrieval_results:
+                        before = len(retrieval_results)
+                        retrieval_results = [
+                            n for n in retrieval_results
+                            if n.score is None or n.score >= adaptive_sim_threshold
+                        ]
+                        logger.debug(
+                            f"Adaptive threshold {adaptive_sim_threshold}: "
+                            f"{before} → {len(retrieval_results)} chunks"
+                        )
 
                 except Exception as e:
                     logger.warning(f"Enhanced retrieval failed [{type(e).__name__}]: {e}", exc_info=True)
@@ -242,6 +334,25 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 llm=local_llm,
             )
             timings["7_llm_completion_ms"] = int((time.time() - t7) * 1000)
+
+            # Log LLM generation to Langfuse
+            try:
+                tracer = get_tracer()
+                from dbnotebook.core.observability.token_counter import get_token_counter as _gtc
+                _tc = _gtc()
+                _prompt_tok = _tc.count_tokens(query + context)
+                _compl_tok = _tc.count_tokens(response_text)
+                tracer.log_generation(
+                    trace_id=trace_id,
+                    name="llm_generation",
+                    model=used_model,
+                    prompt=query,
+                    completion=response_text[:2000] if response_text else "",
+                    usage={"input": _prompt_tok, "output": _compl_tok, "total": _prompt_tok + _compl_tok},
+                    timing_ms=timings["7_llm_completion_ms"],
+                )
+            except Exception as gen_err:
+                logger.debug(f"Generation logging failed (non-fatal): {gen_err}")
 
             # Step 7b: Log query to QueryLogger for metrics
             if pipeline._query_logger:
@@ -286,6 +397,13 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
             logger.info(f"V2 chat completed in {execution_time_ms}ms, {len(sources)} sources, {len(conversation_history)} history turns")
 
+            # End Langfuse trace successfully
+            try:
+                tracer = get_tracer()
+                tracer.end_trace(trace_id, status="success", response=response_text, metadata={"execution_time_ms": execution_time_ms})
+            except Exception as trace_end_err:
+                logger.debug(f"Trace end failed (non-fatal): {trace_end_err}")
+
             return jsonify({
                 "success": True,
                 "response": response_text,
@@ -299,6 +417,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
                     "history_turns_used": len(conversation_history) // 2,
                     "timings": timings,
+                    "trace_id": trace_id,
+                    "query_id": query_id,
                 }
             })
 
@@ -306,6 +426,13 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             logger.error(f"Error in V2 chat endpoint: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            # End trace with error status on failure
+            try:
+                if trace_id:
+                    tracer = get_tracer()
+                    tracer.end_trace(trace_id, status="error", metadata={"error": str(e)})
+            except Exception:
+                pass
             return error_response(str(e), 500)
 
     @app.route("/api/v2/chat/stream", methods=["POST"])
@@ -337,7 +464,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             use_reranker = data.get("use_reranker", True)
             reranker_model = data.get("reranker_model")  # xsmall, base, large
             use_raptor = data.get("use_raptor", True)
-            top_k = data.get("top_k", max_sources)
+            top_k_explicit = data.get("top_k")
+            top_k = top_k_explicit if top_k_explicit is not None else max_sources
 
             # Apply per-request reranker model if specified
             original_reranker_config = None
@@ -364,6 +492,21 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             notebook = notebook_manager.get_notebook(notebook_id)
             if not notebook:
                 return not_found("Notebook", notebook_id)
+
+            # Start trace for this streaming request
+            stream_trace_id = ""
+            stream_query_id = str(uuid4())
+            try:
+                tracer = get_tracer()
+                stream_trace_id = tracer.start_trace(
+                    name="rag_query_stream",
+                    user_id=user_id,
+                    notebook_id=notebook_id,
+                    query=query,
+                    metadata={"query_id": stream_query_id, "model": used_model, "session_id": session_id},
+                )
+            except Exception as strace_err:
+                logger.debug(f"Stream trace start failed (non-fatal): {strace_err}")
 
             def generate():
                 import json
@@ -400,6 +543,33 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     t2 = time_module.time()
                     nodes = pipeline._get_cached_nodes(notebook_id)
                     timings["2_node_cache_ms"] = int((time_module.time() - t2) * 1000)
+
+                    # Apply adaptive similarity_top_k — DB query only on notebook switch
+                    if top_k_explicit is None and nodes and pipeline._engine and pipeline._engine._retriever:
+                        _r = pipeline._engine._retriever
+                        _last_nb = getattr(_r, "_adaptive_notebook_id", None)
+                        if _last_nb != notebook_id:
+                            try:
+                                from dbnotebook.core.services.parameter_optimizer_service import ParameterOptimizerService
+                                _opt = ParameterOptimizerService(
+                                    pipeline=pipeline, db_manager=db_manager, notebook_manager=notebook_manager
+                                )
+                                _adap = _opt.get_adaptive_settings(notebook_id=notebook_id)
+                                new_top_k = min(_adap["top_k"], 20) if _adap and _adap.get("top_k") else max_sources
+                            except Exception as e:
+                                logger.debug(f"Adaptive settings lookup failed (non-fatal): {e}")
+                                new_top_k = max_sources
+                            if new_top_k != getattr(_r, "_adaptive_top_k", max_sources):
+                                if _r._query_settings:
+                                    _r._query_settings.similarity_top_k = new_top_k
+                                _r._setting.retriever.top_k_rerank = new_top_k
+                                _r._retriever_cache.clear()
+                                logger.info(f"similarity_top_k={new_top_k}, top_k_rerank={new_top_k} applied for notebook {notebook_id}")
+                            _r._adaptive_notebook_id = notebook_id
+                            _r._adaptive_top_k = new_top_k
+                            top_k = new_top_k
+                        else:
+                            top_k = getattr(_r, "_adaptive_top_k", max_sources)
 
                     retrieval_results = []
                     raptor_summaries = []
@@ -491,6 +661,18 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     # Calculate total execution time
                     execution_time_ms = int((time_module.time() - start_time) * 1000)
 
+                    # End Langfuse trace — pass response text so it shows in UI output
+                    try:
+                        _tracer = get_tracer()
+                        _tracer.end_trace(
+                            stream_trace_id,
+                            status="success",
+                            response=response_text,
+                            metadata={"execution_time_ms": execution_time_ms},
+                        )
+                    except Exception:
+                        pass
+
                     # Build metadata
                     metadata = {
                         "execution_time_ms": execution_time_ms,
@@ -500,6 +682,8 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
                         "history_turns_used": len(conversation_history) // 2,
                         "timings": timings,
+                        "trace_id": stream_trace_id,
+                        "query_id": stream_query_id,
                     }
 
                     # Send completion signal with metadata
@@ -507,6 +691,11 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
                 except Exception as e:
                     logger.error(f"Streaming error: {e}")
+                    try:
+                        if stream_trace_id:
+                            get_tracer().end_trace(stream_trace_id, status="error", metadata={"error": str(e)})
+                    except Exception:
+                        pass
                     yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
                 finally:
                     # Restore original reranker config if it was overridden

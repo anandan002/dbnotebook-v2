@@ -263,6 +263,40 @@ export async function toggleDocumentActive(
 }
 
 // ============================================
+// Document Content API (for preview)
+// ============================================
+
+export interface DocumentContent {
+  content: string;
+  chunkCount: number;
+  filename: string;
+  fileType: string;
+}
+
+interface BackendDocumentContentResponse {
+  success: boolean;
+  content: string;
+  chunk_count: number;
+  filename: string;
+  file_type: string;
+}
+
+export async function getDocumentContent(
+  notebookId: string,
+  sourceId: string
+): Promise<DocumentContent> {
+  const response = await fetchApi<BackendDocumentContentResponse>(
+    `/notebooks/${notebookId}/documents/${sourceId}/content`
+  );
+  return {
+    content: response.content,
+    chunkCount: response.chunk_count,
+    filename: response.filename,
+    fileType: response.file_type,
+  };
+}
+
+// ============================================
 // Model API
 // ============================================
 
@@ -1263,6 +1297,94 @@ export async function getAttemptStatus(attemptId: string): Promise<AttemptStatus
     } : undefined,
     results: data.results,
   };
+}
+
+// ============================================
+// Feedback API (RAG response quality signals)
+// ============================================
+
+export type FeedbackCategory = 'inaccurate' | 'irrelevant' | 'incomplete' | 'helpful' | 'other';
+
+export interface SubmitFeedbackRequest {
+  trace_id: string;
+  query_id: string;
+  notebook_id: string;
+  rating?: number;       // 1–5 star rating
+  helpful?: boolean;     // thumbs up/down
+  user_message?: string; // free-text explanation
+  feedback_category?: FeedbackCategory;
+}
+
+export interface SubmitFeedbackResponse {
+  success: boolean;
+  feedback_id: string;
+}
+
+export interface FeedbackStats {
+  total_feedback: number;
+  avg_rating: number | null;
+  helpful_ratio: number | null;
+  rating_distribution: Record<string, number>;
+  category_breakdown: Record<string, number>;
+  period_days: number;
+}
+
+/**
+ * Submit user feedback on a chat response.
+ * Requires an authenticated session (user must be logged in).
+ * At least one of `rating` or `helpful` must be provided.
+ */
+export async function submitFeedback(
+  request: SubmitFeedbackRequest
+): Promise<SubmitFeedbackResponse> {
+  const response = await fetch('/api/v2/chat/feedback', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to submit feedback',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+/**
+ * Get aggregated feedback statistics.
+ * Requires an authenticated session.
+ */
+export async function getFeedbackStats(options?: {
+  notebookId?: string;
+  days?: number;
+}): Promise<{ success: boolean; stats: FeedbackStats }> {
+  const params = new URLSearchParams();
+  if (options?.notebookId) params.set('notebook_id', options.notebookId);
+  if (options?.days) params.set('days', options.days.toString());
+
+  const queryString = params.toString();
+  const url = `/api/v2/feedback-stats${queryString ? `?${queryString}` : ''}`;
+
+  const response = await fetch(url, { credentials: 'include' });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to fetch feedback stats',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
 }
 
 // ============================================

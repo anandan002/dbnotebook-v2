@@ -10,11 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/react-pdf": "^6.2.0",
     "lucide-react": "^0.561.0",
     "motion": "^12.23.26",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
+    "react-pdf": "^10.3.0",
     "react-router-dom": "^7.12.0",
     "remark-gfm": "^4.0.1"
   },

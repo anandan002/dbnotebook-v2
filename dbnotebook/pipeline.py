@@ -23,6 +23,7 @@ from .core.conversation import ConversationStore
 from .core.observability import QueryLogger, get_token_counter
 from .core.transformations import TransformationWorker, TransformationJob
 from .core.raptor import RAPTORWorker, RAPTORJob
+from .core.services.feedback_analyzer_worker import FeedbackAnalyzerWorker
 from .core.memory import SessionMemoryService
 from .core.constants import DEFAULT_USER_ID
 from .core.utils import unwrap_llm
@@ -115,6 +116,7 @@ class LocalRAGPipeline:
         self._query_logger: Optional[QueryLogger] = None
         self._transformation_worker: Optional[TransformationWorker] = None
         self._raptor_worker: Optional[RAPTORWorker] = None
+        self._feedback_analyzer_worker: Optional[FeedbackAnalyzerWorker] = None
         if database_url:
             # Increased pool size for better concurrency under load
             # pool_size=20: 20 persistent connections
@@ -214,6 +216,24 @@ class LocalRAGPipeline:
             logger.info("RAPTORWorker started for hierarchical tree building")
         elif skip_background_workers:
             logger.info("RAPTORWorker disabled (DISABLE_BACKGROUND_WORKERS=true)")
+
+        # Initialize FeedbackAnalyzerWorker (optional, controlled by env var)
+        feedback_analyzer_enabled = os.getenv("FEEDBACK_ANALYZER_ENABLED", "").lower() in ("true", "1", "yes")
+        if self._db_manager and feedback_analyzer_enabled and not skip_background_workers:
+            try:
+                interval = float(os.getenv("FEEDBACK_ANALYZER_INTERVAL", "3600"))
+                self._feedback_analyzer_worker = FeedbackAnalyzerWorker(
+                    db_manager=self._db_manager,
+                    interval=interval,
+                )
+                self._feedback_analyzer_worker.start()
+                logger.info(
+                    f"FeedbackAnalyzerWorker started (interval={interval}s)"
+                )
+            except Exception as fa_err:
+                logger.warning(f"FeedbackAnalyzerWorker failed to start: {fa_err}")
+        else:
+            logger.debug("FeedbackAnalyzerWorker disabled (FEEDBACK_ANALYZER_ENABLED not set)")
 
         logger.info(f"Pipeline initialized - Host: {host}")
         logger.debug(f"LLM Model: {self._model_name or self._settings.ollama.llm}")
@@ -1295,6 +1315,47 @@ class LocalRAGPipeline:
                     max_history=max_history,
                 )
 
+            # Apply adaptive retrieval parameters derived from feedback analysis
+            effective_top_k = max_sources
+            adaptive_sim_threshold: Optional[float] = None
+            if self._db_manager:
+                try:
+                    from .core.services.parameter_optimizer_service import ParameterOptimizerService
+                    from .setting import QueryTimeSettings
+                    optimizer = ParameterOptimizerService(
+                        pipeline=self,
+                        db_manager=self._db_manager,
+                        notebook_manager=self._notebook_manager,
+                    )
+                    adaptive = optimizer.get_adaptive_settings(notebook_id=notebook_id)
+                    if adaptive:
+                        if "top_k" in adaptive:
+                            # Use adaptive top_k as the internal retriever similarity_top_k
+                            # so the retriever fetches more candidates, not just slices output
+                            adaptive_top_k = adaptive["top_k"]
+                            effective_top_k = max(max_sources, adaptive_top_k)
+                            # Push the top_k into the retriever via QueryTimeSettings so
+                            # it controls how many candidates are fetched pre-rerank
+                            if self._engine:
+                                current_qs = self._engine._retriever._query_settings
+                                new_qs = QueryTimeSettings(
+                                    similarity_top_k=adaptive_top_k,
+                                    bm25_weight=current_qs.bm25_weight if current_qs else 0.5,
+                                    vector_weight=current_qs.vector_weight if current_qs else 0.5,
+                                    temperature=current_qs.temperature if current_qs else 0.1,
+                                )
+                                self._engine._retriever.set_query_settings(new_qs)
+                                # Bust cache so the new similarity_top_k takes effect
+                                self._engine._retriever._retriever_cache.clear()
+                        if "similarity_threshold" in adaptive:
+                            adaptive_sim_threshold = adaptive["similarity_threshold"]
+                        logger.debug(
+                            f"Adaptive settings applied: top_k={effective_top_k}, "
+                            f"sim_threshold={adaptive_sim_threshold} | notebook={notebook_id}"
+                        )
+                except Exception as _oe:
+                    logger.debug(f"Adaptive settings lookup failed (non-fatal): {_oe}")
+
             retrieval_results = []
             if self._engine and self._engine._retriever:
                 retrieval_results = fast_retrieve(
@@ -1304,8 +1365,19 @@ class LocalRAGPipeline:
                     vector_store=self._vector_store,
                     retriever_factory=self._engine._retriever,
                     llm=Settings.llm,
-                    top_k=max_sources,
+                    top_k=effective_top_k,
                 )
+                # Apply similarity threshold filter from adaptive settings
+                if adaptive_sim_threshold is not None and retrieval_results:
+                    before = len(retrieval_results)
+                    retrieval_results = [
+                        n for n in retrieval_results
+                        if n.score is None or n.score >= adaptive_sim_threshold
+                    ]
+                    logger.debug(
+                        f"Similarity threshold {adaptive_sim_threshold} filtered "
+                        f"{before} → {len(retrieval_results)} nodes"
+                    )
 
             raptor_summaries = get_raptor_summaries(
                 query=message,
@@ -1875,5 +1947,21 @@ Refined Implementation Plan:"""
                 logger.info("RAPTORWorker stopped")
             except Exception as e:
                 logger.error(f"Error stopping RAPTORWorker: {e}")
+
+        # Stop FeedbackAnalyzerWorker
+        if hasattr(self, '_feedback_analyzer_worker') and self._feedback_analyzer_worker:
+            try:
+                self._feedback_analyzer_worker.stop()
+                logger.info("FeedbackAnalyzerWorker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping FeedbackAnalyzerWorker: {e}")
+
+        # Flush Langfuse trace buffer before exit
+        try:
+            from dbnotebook.core.observability import get_tracer
+            get_tracer().flush()
+            logger.info("Langfuse trace buffer flushed")
+        except Exception as e:
+            logger.error(f"Langfuse flush failed on shutdown: {e}")
 
         logger.info("Pipeline shutdown complete")
