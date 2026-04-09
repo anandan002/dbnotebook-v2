@@ -1,10 +1,10 @@
 #!/bin/bash
 # DBNotebook Development Script
-# Usage: ./dev.sh [local|docker|stop|status|logs]
+# Usage: ./scripts/sh/dev.sh [local|docker|stop|status|logs]
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR"
 
 # Colors for output
@@ -143,7 +143,7 @@ start_local() {
     # Start Flask
     print_success "Starting Flask on http://localhost:7860"
     echo -e "  ${YELLOW}Login:${NC} admin / admin123"
-    echo -e "  ${YELLOW}Stop:${NC}  ./dev.sh stop"
+    echo -e "  ${YELLOW}Stop:${NC}  ./scripts/sh/dev.sh stop"
     echo ""
 
     PYTHONPATH="$SCRIPT_DIR" python3 -m dbnotebook --host 0.0.0.0 --port 7860
@@ -182,8 +182,8 @@ start_docker() {
     if curl -s http://localhost:7007/api/auth/me >/dev/null 2>&1; then
         print_success "Docker running on http://localhost:7007"
         echo -e "  ${YELLOW}Login:${NC} admin / admin123"
-        echo -e "  ${YELLOW}Logs:${NC}  ./dev.sh logs"
-        echo -e "  ${YELLOW}Stop:${NC}  ./dev.sh stop"
+        echo -e "  ${YELLOW}Logs:${NC}  ./scripts/sh/dev.sh logs"
+        echo -e "  ${YELLOW}Stop:${NC}  ./scripts/sh/dev.sh stop"
     else
         print_warning "Container started but health check pending..."
         echo "  Check logs: docker logs dbnotebook"
@@ -219,7 +219,7 @@ case "${1:-}" in
         ;;
     *)
         echo -e "\n${BLUE}DBNotebook Development Script${NC}\n"
-        echo "Usage: ./dev.sh [command]"
+        echo "Usage: ./scripts/sh/dev.sh [command]"
         echo ""
         echo "Commands:"
         echo "  local, l    Start local Flask development server (port 7860)"

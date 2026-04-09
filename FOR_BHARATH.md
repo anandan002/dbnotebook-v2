@@ -1010,18 +1010,18 @@ eventSource.onmessage = (event) => {
 
 ```bash
 # Development (macOS/Local)
-./dev.sh local              # Start Flask on :7860
-./dev.sh status             # Check what's running
-./dev.sh stop               # Stop everything
+./scripts/sh/dev.sh local              # Start Flask on :7860
+./scripts/sh/dev.sh status             # Check what's running
+./scripts/sh/dev.sh stop               # Stop everything
 
 # Production (Linux)
-./prod.sh start             # Start in background with logging
-./prod.sh stop              # Graceful shutdown
-./prod.sh restart           # Stop + Start
-./prod.sh status            # PID, uptime, memory, PostgreSQL status
-./prod.sh logs              # Follow app + error logs
-./prod.sh health            # HTTP health check
-./prod.sh rotate            # Rotate log files (keeps 7 days)
+./scripts/sh/prod.sh start             # Start in background with logging
+./scripts/sh/prod.sh stop              # Graceful shutdown
+./scripts/sh/prod.sh restart           # Stop + Start
+./scripts/sh/prod.sh status            # PID, uptime, memory, PostgreSQL status
+./scripts/sh/prod.sh logs              # Follow app + error logs
+./scripts/sh/prod.sh health            # HTTP health check
+./scripts/sh/prod.sh rotate            # Rotate log files (keeps 7 days)
 
 # Frontend
 cd frontend && npm run dev  # Dev server on :3000
@@ -1169,9 +1169,9 @@ Throughput: 2.17 req/s
 
 ## 6.4 Deployment
 
-### Linux Production (`prod.sh`)
+### Linux Production (`scripts/sh/prod.sh`)
 
-The `prod.sh` script manages production deployments on Linux servers:
+The `scripts/sh/prod.sh` script manages production deployments on Linux servers:
 
 ```bash
 # First-time setup
@@ -1180,7 +1180,7 @@ pip install -r requirements.txt
 cp .env.example .env && nano .env  # Configure
 
 # Start production
-./prod.sh start
+./scripts/sh/prod.sh start
 # → Validates .env exists
 # → Checks PostgreSQL is reachable
 # → Activates venv
@@ -1189,10 +1189,10 @@ cp .env.example .env && nano .env  # Configure
 # → Logs to logs/app.log and logs/error.log
 
 # Management
-./prod.sh status   # Shows PID, uptime, memory usage
-./prod.sh logs     # tail -f both log files
-./prod.sh health   # curl /api/auth/me health check
-./prod.sh rotate   # Rotate logs, keep 7 days, gzip old
+./scripts/sh/prod.sh status   # Shows PID, uptime, memory usage
+./scripts/sh/prod.sh logs     # tail -f both log files
+./scripts/sh/prod.sh health   # curl /api/auth/me health check
+./scripts/sh/prod.sh rotate   # Rotate logs, keep 7 days, gzip old
 ```
 
 **Key Features**:
@@ -1204,7 +1204,7 @@ cp .env.example .env && nano .env  # Configure
 ### Docker Production
 
 ```bash
-./dev.sh docker               # Build + start on :7007
+./scripts/sh/dev.sh docker               # Build + start on :7007
 docker compose up -d --build  # Alternative
 ```
 

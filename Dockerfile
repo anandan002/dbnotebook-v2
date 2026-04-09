@@ -68,7 +68,7 @@ COPY dbnotebook/ dbnotebook/
 COPY --from=frontend-builder /app/frontend/dist frontend/dist/
 COPY alembic/ alembic/
 COPY alembic.ini .
-COPY docker-entrypoint.sh .
+COPY scripts/sh/docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
 
 # Create mount point directories (config files created at runtime)

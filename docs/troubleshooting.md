@@ -85,6 +85,111 @@ psql -d dbnotebook_dev -c "CREATE EXTENSION IF NOT EXISTS vector;"
    arch -x86_64 pip install package-name
    ```
 
+4. **For Windows resolver conflicts (`ResolutionImpossible`)**:
+   - Use `scripts/ps1/dbnotebook-service.ps1 -Action Install` so dependency bootstrap uses the Windows-filtered requirements path.
+
+---
+
+### Windows Service Install/Start Issues
+
+**Symptoms**: service remains `Paused`, `Failed to start`, or repeatedly restarts.
+
+**Solutions**:
+
+1. **Run service actions in elevated PowerShell** (Run as Administrator).
+
+2. **Use explicit tool paths** when installing:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 `
+     -Action Install `
+     -NodeDir "C:\tools\node-v24.14.0-win-x64" `
+     -BootstrapPythonExe "C:\tools\python-3.11.9\python.exe"
+   ```
+
+3. **Check service log first**:
+   ```powershell
+   Get-Content .\logs\windows-service.log -Tail 200
+   ```
+
+4. **Verify alembic executable exists in venv**:
+   ```powershell
+   Test-Path .\venv\Scripts\alembic.exe
+   ```
+
+5. **Recreate service cleanly**:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Stop
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Uninstall
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Install -NodeDir "C:\tools\node-v24.14.0-win-x64" -BootstrapPythonExe "C:\tools\python-3.11.9\python.exe"
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Start
+   ```
+
+---
+
+### Frontend `dist` Folder Missing
+
+**Symptoms**: `frontend/dist` not found, UI not served.
+
+**Solutions**:
+
+1. Build manually:
+   ```bash
+   cd frontend
+   npm install
+   npm run build
+   ```
+
+2. Confirm output:
+   ```bash
+   ls frontend/dist
+   ```
+
+   Windows PowerShell:
+   ```powershell
+   Get-ChildItem .\frontend\dist
+   ```
+
+3. For service mode, verify Node path passed through `-NodeDir`.
+
+---
+
+### Config File Encoding Errors on Windows
+
+**Symptoms**: `charmap codec can't decode byte ...` while loading `config/dbnotebook.yaml`.
+
+**Solutions**:
+
+1. Convert config files to UTF-8 (without ANSI/legacy codepages).
+2. Re-save `config/dbnotebook.yaml` in UTF-8 using your editor.
+3. Restart service:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Stop
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Start
+   ```
+
+---
+
+### Excel Ingestion Fails with Missing `openpyxl`
+
+**Symptoms**: pandas error mentioning missing optional dependency `openpyxl`.
+
+**Solutions**:
+
+1. Install into the active environment:
+   ```bash
+   pip install openpyxl
+   ```
+
+   Windows PowerShell:
+   ```powershell
+   .\venv\Scripts\python.exe -m pip install openpyxl
+   ```
+
+2. Verify:
+   ```bash
+   python -c "import openpyxl; print(openpyxl.__version__)"
+   ```
+
 ---
 
 ## LLM Provider Issues

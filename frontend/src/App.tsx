@@ -15,6 +15,7 @@ import { Login } from './pages/Login';
 import { Admin } from './pages/Admin';
 import { Profile } from './pages/Profile';
 import { SQLChatPage } from './components/SQLChat';
+import { ROUTER_BASENAME } from './utils/paths';
 
 function AppContent() {
   // Use App context for navigation and model state
@@ -247,7 +248,7 @@ function AppRoutes() {
 
 function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={ROUTER_BASENAME}>
       <AppProviders>
         <AppRoutes />
       </AppProviders>

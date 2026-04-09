@@ -1,8 +1,5 @@
 #!/bin/bash
 set -e
 
-echo "Running database migrations..."
-alembic upgrade head
-
-echo "Starting DBNotebook..."
-exec python -m dbnotebook --host 0.0.0.0 --port 7860
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/scripts/sh/docker-entrypoint.sh" "$@"

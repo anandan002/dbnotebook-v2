@@ -1,6 +1,11 @@
 # Project directories (not tracked)
 tests/
-scripts/
+scripts/*
+!scripts/README.md
+!scripts/sh/
+!scripts/sh/**
+!scripts/ps1/
+!scripts/ps1/**
 upload/
 prototype/
 

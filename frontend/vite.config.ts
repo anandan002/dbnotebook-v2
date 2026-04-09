@@ -2,8 +2,19 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+function resolveViteBasePath(): string {
+  const configured = process.env.VITE_APP_BASE_PATH?.trim()
+  if (!configured || configured === '/') {
+    return '/'
+  }
+
+  const sanitized = configured.replace(/^\/+|\/+$/g, '')
+  return `/${sanitized}/`
+}
+
 // https://vite.dev/config/
 export default defineConfig({
+  base: resolveViteBasePath(),
   plugins: [react(), tailwindcss()],
   server: {
     port: 3000,

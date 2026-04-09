@@ -1,6 +1,10 @@
-# Server Deployment Guide (Without Docker)
+# Server Deployment Guide (Linux, Without Docker)
 
-Deploy DBNotebook on any Linux server (Ubuntu, Azure VM, AWS EC2, etc.) using `dev.sh local` for development or Gunicorn for production.
+This guide is **Linux-focused** (Ubuntu, Azure VM, AWS EC2, etc.).
+
+For Windows/macOS workflows and service alternatives, start with [Cross-Platform Deployment](CROSS_PLATFORM_DEPLOYMENT.md).
+
+Deploy DBNotebook on Linux using `scripts/sh/dev.sh local` for development or `scripts/sh/prod.sh start` for production process management.
 
 ## Table of Contents
 
@@ -79,7 +83,7 @@ cd frontend && npm install && npm run build && cd ..
 PYTHONPATH=. alembic upgrade head
 
 # 9. Start application
-./dev.sh local  # Development mode
+./scripts/sh/dev.sh local  # Development mode
 # OR
 gunicorn -w 4 -b 0.0.0.0:7860 "dbnotebook.ui.web:create_app()"  # Production
 ```
@@ -369,31 +373,31 @@ python3 -c "import secrets; print('dbn_' + secrets.token_hex(16))"
 
 ### Option 1: Production Script (Recommended)
 
-Use `prod.sh` for production deployments on Linux servers:
+Use `scripts/sh/prod.sh` for production deployments on Linux servers:
 
 ```bash
 cd /opt/dbnotebook
 
 # Start in background
-./prod.sh start
+./scripts/sh/prod.sh start
 
 # Check status
-./prod.sh status
+./scripts/sh/prod.sh status
 
 # View logs
-./prod.sh logs
+./scripts/sh/prod.sh logs
 
 # Stop
-./prod.sh stop
+./scripts/sh/prod.sh stop
 
 # Restart
-./prod.sh restart
+./scripts/sh/prod.sh restart
 
 # Health check
-./prod.sh health
+./scripts/sh/prod.sh health
 ```
 
-**What prod.sh does:**
+**What scripts/sh/prod.sh does:**
 1. Loads environment variables from `.env`
 2. Activates the virtual environment
 3. Runs Alembic database migrations
@@ -425,13 +429,13 @@ PYTHONPATH=. python3 -m flask --app "dbnotebook.ui.web:create_app()" run --host 
 
 ## Production Deployment
 
-For production, use `prod.sh` which runs Flask with threading. This provides better compatibility with the app's SSE streaming and long-running LLM requests.
+For production, use `scripts/sh/prod.sh` which runs Flask with threading. This provides better compatibility with the app's SSE streaming and long-running LLM requests.
 
-### Using prod.sh (Recommended)
+### Using scripts/sh/prod.sh (Recommended)
 
 ```bash
 # Start application in background
-./prod.sh start
+./scripts/sh/prod.sh start
 
 # The script handles:
 # - Environment loading
@@ -456,7 +460,7 @@ gunicorn -k gevent -w 4 --worker-connections 1000 \
   "dbnotebook.ui.web:create_app()"
 ```
 
-**Note**: Standard Gunicorn sync workers may cause issues with SSE streaming and long LLM requests. Use `gevent` workers or stick with `prod.sh`.
+**Note**: Standard Gunicorn sync workers may cause issues with SSE streaming and long LLM requests. Use `gevent` workers or stick with `scripts/sh/prod.sh`.
 
 ---
 

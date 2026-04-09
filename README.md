@@ -14,11 +14,23 @@ A notebook-based RAG (Retrieval-Augmented Generation) system with multimodal cap
 git clone https://github.com/beedev/dbnotebook.git
 cd dbnotebook
 
-# Run the startup script
-./start.sh
+# Run the startup script (macOS/Linux)
+./scripts/sh/start.sh
 
 # Open browser at http://localhost:7860
 ```
+
+Windows (PowerShell):
+
+```powershell
+py -3.11 -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+.\venv\Scripts\python.exe -m dbnotebook --host 0.0.0.0 --port 7860
+```
+
+Cross-platform deployment and service setup:
+[docs/deployment/CROSS_PLATFORM_DEPLOYMENT.md](docs/deployment/CROSS_PLATFORM_DEPLOYMENT.md)
 
 ---
 

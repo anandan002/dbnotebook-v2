@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-**LOCAL DEVELOPMENT (PREFERRED)**: Use `./dev.sh` with local PostgreSQL on port 5432.
+**LOCAL DEVELOPMENT (PREFERRED)**: Use `./scripts/sh/dev.sh` with local PostgreSQL on port 5432.
 
 ```bash
 # First-time setup
@@ -19,21 +19,21 @@ brew services start postgresql@17        # macOS - start PostgreSQL
 createdb dbnotebook_dev                   # Create database if needed
 
 # Local development (PREFERRED method)
-./dev.sh local                # Start Flask backend locally (uses venv, localhost:5432)
-./dev.sh                      # Shows usage help
-./dev.sh status               # Check status of all services
-./dev.sh stop                 # Stop all services
-./dev.sh logs                 # Follow Docker container logs
+./scripts/sh/dev.sh local                # Start Flask backend locally (uses venv, localhost:5432)
+./scripts/sh/dev.sh                      # Shows usage help
+./scripts/sh/dev.sh status               # Check status of all services
+./scripts/sh/dev.sh stop                 # Stop all services
+./scripts/sh/dev.sh logs                 # Follow Docker container logs
 
 # Local PostgreSQL setup
 # - PostgreSQL running on localhost:5432
 # - Database: dbnotebook_dev
 # - User/Password: dbnotebook/dbnotebook
 # - Default login: admin / admin123
-# - .env uses host.docker.internal but dev.sh replaces with localhost
+# - .env uses host.docker.internal but scripts/sh/dev.sh replaces with localhost
 
 # Docker deployment (for production-like testing)
-./dev.sh docker               # Build and start Docker container (port 7007)
+./scripts/sh/dev.sh docker               # Build and start Docker container (port 7007)
 docker compose up --build     # Alternative: direct docker compose
 docker compose up -d          # Run in background
 docker compose logs -f        # Follow logs

@@ -38,7 +38,7 @@ def _load_models_from_yaml() -> dict[str, Set[str]]:
         return model_sets
 
     try:
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8-sig") as f:
             config = yaml.safe_load(f)
 
         providers = config.get("providers", {})

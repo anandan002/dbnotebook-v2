@@ -43,6 +43,36 @@ ALLOWED_CORS_ORIGINS = [
 ]
 
 
+def _get_app_base_path() -> str:
+    """Get normalized app base path for subpath deployments."""
+    base_path = os.getenv("DBNOTEBOOK_BASE_PATH", "").strip()
+    if not base_path or base_path == "/":
+        return ""
+
+    if not base_path.startswith("/"):
+        base_path = f"/{base_path}"
+
+    normalized = base_path.rstrip("/")
+    return "" if normalized == "/" else normalized
+
+
+def _with_app_base(path: str) -> str:
+    """Prefix an absolute app path with configured base path, if needed."""
+    if not path:
+        return path
+
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    app_base = _get_app_base_path()
+
+    if not app_base:
+        return normalized_path
+
+    if normalized_path == app_base or normalized_path.startswith(f"{app_base}/"):
+        return normalized_path
+
+    return f"{app_base}{normalized_path}"
+
+
 class FlaskChatbotUI:
     """Flask-based UI for the RAG chatbot."""
 
@@ -675,7 +705,7 @@ Output ONLY valid JSON, nothing else."""
 
                             if image_paths:
                                 for idx, path in enumerate(image_paths):
-                                    image_url = f"/image/{os.path.basename(path)}"
+                                    image_url = _with_app_base(f"/image/{os.path.basename(path)}")
                                     success_msg = f"\n Image {idx + 1} generated!\n"
                                     yield f"data: {json.dumps({'token': success_msg})}\n\n"
                                     yield f"data: {json.dumps({'image': image_url, 'message': 'Generated image'})}\n\n"
@@ -1177,7 +1207,7 @@ Output ONLY valid JSON, nothing else."""
                 for path in image_paths:
                     info = self._image_provider.get_image_info(path)
                     info["path"] = path
-                    info["url"] = f"/image/{Path(path).name}"
+                    info["url"] = _with_app_base(f"/image/{Path(path).name}")
                     images_info.append(info)
 
                 return jsonify({
@@ -1224,7 +1254,7 @@ Output ONLY valid JSON, nothing else."""
 
                 for path in image_paths:
                     info = self._image_provider.get_image_info(path)
-                    info["url"] = f"/image/{Path(path).name}"
+                    info["url"] = _with_app_base(f"/image/{Path(path).name}")
                     images_info.append(info)
 
                 return jsonify({

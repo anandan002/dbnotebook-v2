@@ -1,10 +1,10 @@
 #!/bin/bash
 # DBNotebook Production Script (Linux)
-# Usage: ./prod.sh [start|stop|restart|status|logs]
+# Usage: ./scripts/sh/prod.sh [start|stop|restart|status|logs]
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR"
 
 # Configuration
@@ -144,7 +144,7 @@ start_app() {
     if is_running; then
         PID=$(get_pid)
         print_warning "$APP_NAME is already running (PID: $PID)"
-        echo "  Stop with: ./prod.sh stop"
+        echo "  Stop with: ./scripts/sh/prod.sh stop"
         return 1
     fi
 
@@ -180,9 +180,9 @@ start_app() {
         echo ""
         echo -e "  ${BLUE}URL:${NC}     http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):$APP_PORT"
         echo -e "  ${BLUE}PID:${NC}     $PID"
-        echo -e "  ${BLUE}Logs:${NC}    ./prod.sh logs"
-        echo -e "  ${BLUE}Status:${NC}  ./prod.sh status"
-        echo -e "  ${BLUE}Stop:${NC}    ./prod.sh stop"
+        echo -e "  ${BLUE}Logs:${NC}    ./scripts/sh/prod.sh logs"
+        echo -e "  ${BLUE}Status:${NC}  ./scripts/sh/prod.sh status"
+        echo -e "  ${BLUE}Stop:${NC}    ./scripts/sh/prod.sh stop"
         echo ""
     else
         print_error "Failed to start $APP_NAME"
@@ -345,7 +345,7 @@ show_help() {
     echo ""
     echo -e "${BLUE}DBNotebook Production Script${NC}"
     echo ""
-    echo "Usage: ./prod.sh [command]"
+    echo "Usage: ./scripts/sh/prod.sh [command]"
     echo ""
     echo "Commands:"
     echo "  start       Start the application in background"

@@ -37,6 +37,7 @@ import { ToastContainer } from '../components/ui';
 import { WebSearchPanel } from '../components/Sidebar/WebSearchPanel';
 import { getDocumentContent } from '../services/api';
 import type { Notebook, Document as DocType } from '../types';
+import { withBasePath } from '../utils/paths';
 
 // Set up PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -394,7 +395,7 @@ export function DocumentsLandingPage() {
           ) : (
             <div className="p-4">
               <Document
-                file={`/api/notebooks/${selectedNotebook?.id}/documents/${previewDoc.source_id}/pdf`}
+                file={withBasePath(`/api/notebooks/${selectedNotebook?.id}/documents/${previewDoc.source_id}/pdf`)}
                 onLoadSuccess={onDocumentLoadSuccess}
                 onLoadError={onDocumentLoadError}
                 loading={

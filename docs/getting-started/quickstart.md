@@ -10,8 +10,16 @@ If you haven't installed yet, see [Installation](installation.md).
 
 ```bash
 cd dbnotebook
-./dev.sh local
+./scripts/sh/dev.sh local
 ```
+
+Windows users can run the foreground process with:
+
+```powershell
+.\venv\Scripts\python.exe -m dbnotebook --host 0.0.0.0 --port 7860
+```
+
+For Windows service setup or production entry points, see [Cross-Platform Deployment](../deployment/CROSS_PLATFORM_DEPLOYMENT.md).
 
 Open http://localhost:7860 and login with `admin` / `admin123`.
 

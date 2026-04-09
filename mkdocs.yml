@@ -87,6 +87,7 @@ nav:
     - Query Flows: query-flows-architecture.md
     - Conversation System: CONVERSATION_ARCHITECTURE.md
   - Deployment:
+    - Cross-Platform Deployment: deployment/CROSS_PLATFORM_DEPLOYMENT.md
     - Server Deployment: deployment/SERVER_DEPLOYMENT.md
     - PostgreSQL Setup: POSTGRESQL_PGVECTOR_SETUP.md
     - Multi-User & RBAC: USER_RBAC_GUIDE.md

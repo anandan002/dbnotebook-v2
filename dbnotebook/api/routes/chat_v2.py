@@ -514,6 +514,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 response_text = ""
                 start_time = time_module.time()
                 timings = {}
+                effective_top_k = top_k
 
                 try:
                     # Load history
@@ -567,9 +568,9 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                                 logger.info(f"similarity_top_k={new_top_k}, top_k_rerank={new_top_k} applied for notebook {notebook_id}")
                             _r._adaptive_notebook_id = notebook_id
                             _r._adaptive_top_k = new_top_k
-                            top_k = new_top_k
+                            effective_top_k = new_top_k
                         else:
-                            top_k = getattr(_r, "_adaptive_top_k", max_sources)
+                            effective_top_k = getattr(_r, "_adaptive_top_k", max_sources)
 
                     retrieval_results = []
                     raptor_summaries = []
@@ -586,7 +587,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                                 retriever_factory=pipeline._engine._retriever,
                                 llm=local_llm,
                                 embed_model=Settings.embed_model,
-                                top_k=top_k,
+                                top_k=effective_top_k,
                                 use_raptor=use_raptor,
                                 use_reranker=use_reranker,
                             )

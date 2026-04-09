@@ -17,6 +17,7 @@ import { ChartGrid } from './ChartGrid';
 import { ColumnProfileTable } from './ColumnProfileTable';
 import { DashboardModifier } from './DashboardModifier';
 import { FilteredDataTable } from './FilteredDataTable';
+import { withBasePath } from '../../utils/paths';
 
 type TabType = 'dashboard' | 'profile';
 
@@ -57,7 +58,7 @@ export function DashboardView({ className = '' }: DashboardViewProps) {
 
   const handleOpenProfile = useCallback(() => {
     if (sessionId && profilingResult?.htmlReportUrl) {
-      window.open(`/api/analytics/profile/${sessionId}/html`, '_blank');
+      window.open(withBasePath(`/api/analytics/profile/${sessionId}/html`), '_blank');
     }
   }, [sessionId, profilingResult]);
 
@@ -270,7 +271,7 @@ export function DashboardView({ className = '' }: DashboardViewProps) {
             {profilingResult?.htmlReportUrl && sessionId && (
               <div className="dashboard-view__profile-iframe">
                 <iframe
-                  src={`/api/analytics/profile/${sessionId}/html`}
+                  src={withBasePath(`/api/analytics/profile/${sessionId}/html`)}
                   title="Data Profile Report"
                   className="profile-iframe"
                 />

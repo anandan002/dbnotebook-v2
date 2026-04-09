@@ -8,7 +8,7 @@ All notable changes to DBNotebook are documented here.
 
 ### Added
 - Server deployment guide for production Linux deployments
-- `prod.sh` script for Linux production deployments
+- `scripts/sh/prod.sh` script for Linux production deployments
 - Updated OpenAPI specification
 
 ### Fixed

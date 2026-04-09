@@ -37,6 +37,36 @@ DIFFICULTY_LABELS = {
 }
 
 
+def _get_app_base_path() -> str:
+    """Get normalized app base path for subpath deployments."""
+    base_path = os.getenv("DBNOTEBOOK_BASE_PATH", "").strip()
+    if not base_path or base_path == "/":
+        return ""
+
+    if not base_path.startswith("/"):
+        base_path = f"/{base_path}"
+
+    normalized = base_path.rstrip("/")
+    return "" if normalized == "/" else normalized
+
+
+def _with_app_base(path: str) -> str:
+    """Prefix an absolute app path with configured base path, if needed."""
+    if not path:
+        return path
+
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    app_base = _get_app_base_path()
+
+    if not app_base:
+        return normalized_path
+
+    if normalized_path == app_base or normalized_path.startswith(f"{app_base}/"):
+        return normalized_path
+
+    return f"{app_base}{normalized_path}"
+
+
 class QuestionType(str, Enum):
     """Types of quiz questions supported."""
     MULTIPLE_CHOICE = "multiple_choice"      # Standard 4-option question
@@ -301,7 +331,7 @@ class QuizService(BaseService):
             return {
                 'quiz_id': str(quiz.id),
                 'title': title,
-                'link': f"/quiz/{quiz.id}",
+                'link': _with_app_base(f"/quiz/{quiz.id}"),
                 'num_questions': num_questions,
                 'difficulty_mode': difficulty_mode,
                 'time_limit': time_limit,
@@ -428,7 +458,7 @@ class QuizService(BaseService):
                     'difficulty_mode': quiz.difficulty_mode,
                     'time_limit': quiz.time_limit_minutes,
                     'attempt_count': attempt_count,
-                    'link': f"/quiz/{quiz.id}",
+                    'link': _with_app_base(f"/quiz/{quiz.id}"),
                     'created_at': quiz.created_at.isoformat()
                 })
 

@@ -284,7 +284,7 @@ class ModelsSettings(BaseModel):
             return cls()
 
         try:
-            with open(config_path, 'r') as f:
+            with open(config_path, 'r', encoding='utf-8-sig') as f:
                 data = yaml.safe_load(f) or {}
 
             # Parse providers

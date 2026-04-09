@@ -30,8 +30,16 @@ import type {
   SubmitAnswerResponse,
   AttemptStatusResponse,
 } from '../types/quiz';
+import { withBasePath } from '../utils/paths';
 
-const API_BASE = '/api';
+const API_BASE = withBasePath('/api');
+const CHAT_BASE = withBasePath('/chat');
+const IMAGE_GENERATE_URL = withBasePath('/image/generate');
+const CLEAR_URL = withBasePath('/clear');
+
+function withAppBase(path: string): string {
+  return withBasePath(path);
+}
 
 // Generic fetch wrapper with error handling
 async function fetchApi<T>(
@@ -389,7 +397,7 @@ export async function sendChatMessage(
   request: ChatRequest,
   callbacks: StreamCallbacks
 ): Promise<void> {
-  const response = await fetch('/chat', {
+  const response = await fetch(CHAT_BASE, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -444,7 +452,7 @@ export async function sendChatMessage(
             }
 
             if (parsed.images && callbacks.onImages) {
-              callbacks.onImages(parsed.images);
+              callbacks.onImages(parsed.images.map((image: string) => withAppBase(image)));
             }
 
             // Handle done signal with optional sources and metadata
@@ -487,7 +495,7 @@ export async function sendChatMessage(
 export async function sendChatMessageSync(
   request: ChatRequest
 ): Promise<{ response: string; images?: string[] }> {
-  const response = await fetch('/chat', {
+  const response = await fetch(CHAT_BASE, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -517,7 +525,7 @@ export async function sendChatMessageSync(
 export async function generateImage(
   request: ImageGenerateRequest
 ): Promise<ImageGenerateResponse> {
-  const response = await fetch('/image/generate', {
+  const response = await fetch(IMAGE_GENERATE_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -542,8 +550,7 @@ export async function generateImage(
 // ============================================
 
 export function clearChat(): Promise<{ success: boolean }> {
-  // Note: Using non-API endpoint /clear (not /api/clear)
-  return fetch('/clear', {
+  return fetch(CLEAR_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
   }).then(res => res.json());
@@ -994,7 +1001,7 @@ export async function createQuiz(
   const data = await response.json();
   return {
     quizId: data.quiz_id,
-    link: data.link,
+    link: withAppBase(data.link ?? `/quiz/${data.quiz_id}`),
     title: data.title,
     questionSource: data.question_source,
     includeCodeQuestions: data.include_code_questions,
@@ -1063,7 +1070,7 @@ export async function listQuizzes(): Promise<Quiz[]> {
     timeLimitMinutes: q.time_limit,
     isActive: q.is_active !== false,
     attemptCount: q.attempt_count || 0,
-    link: q.link,
+    link: withAppBase(String(q.link || `/quiz/${q.id}`)),
     createdAt: q.created_at,
   }));
 }
@@ -1095,7 +1102,7 @@ export async function getQuizResults(quizId: string): Promise<QuizResultsRespons
       timeLimitMinutes: data.quiz.time_limit,
       isActive: data.quiz.is_active,
       attemptCount: data.statistics.total_attempts,
-      link: `/quiz/${data.quiz.id}`,
+      link: withAppBase(`/quiz/${data.quiz.id}`),
       createdAt: data.quiz.created_at,
     },
     statistics: {
