@@ -162,10 +162,14 @@ Expected output: `frontend/dist`
 
 ## 7. Start Application
 
+Choose one mode:
+- Manual foreground process (macOS/Linux or Windows).
+- Service/managed run (Windows NSSM service or macOS/Linux `prod.sh` in Production Entry Points below).
+
 === "macOS/Linux (local dev)"
 
     ```bash
-    ./scripts/sh/dev.sh local
+    bash ./scripts/sh/dev.sh local
     ```
 
 === "Windows (foreground process)"
@@ -195,7 +199,7 @@ Open http://localhost:7860 and login with `admin` / `admin123`.
 ## Docker Mode
 
 ```bash
-./scripts/sh/dev.sh docker
+bash ./scripts/sh/dev.sh docker
 # or
 docker compose up --build -d
 ```
@@ -206,7 +210,7 @@ Application URL: http://localhost:7007
 
 ## Production Entry Points
 
-- **macOS/Linux**: `./scripts/sh/prod.sh start`
+- **macOS/Linux**: `bash ./scripts/sh/prod.sh start`
 - **Windows**: `scripts/ps1/dbnotebook-service.ps1` (NSSM-managed service)
 
 For Linux server hardening (`systemd`, Nginx, SSL), see [Server Deployment Guide](../deployment/SERVER_DEPLOYMENT.md).

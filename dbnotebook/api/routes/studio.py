@@ -35,6 +35,36 @@ FONTS: [description or "Not determined"]
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 
+def _get_app_base_path() -> str:
+    """Get normalized app base path for subpath deployments."""
+    base_path = os.getenv("DBNOTEBOOK_BASE_PATH", "").strip()
+    if not base_path or base_path == "/":
+        return ""
+
+    if not base_path.startswith("/"):
+        base_path = f"/{base_path}"
+
+    normalized = base_path.rstrip("/")
+    return "" if normalized == "/" else normalized
+
+
+def _with_app_base(path: str) -> str:
+    """Prefix an absolute app path with configured base path, if needed."""
+    if not path:
+        return path
+
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    app_base = _get_app_base_path()
+
+    if not app_base:
+        return normalized_path
+
+    if normalized_path == app_base or normalized_path.startswith(f"{app_base}/"):
+        return normalized_path
+
+    return f"{app_base}{normalized_path}"
+
+
 def _parse_brand_extraction_response(response_text: str) -> dict:
     """Parse the brand extraction response from Vision API."""
     brand_info = {}
@@ -159,8 +189,8 @@ def create_studio_routes(
 
             # Add thumbnail URLs
             for item in items:
-                item["thumbnail_url"] = f"/api/studio/content/{item['content_id']}/thumbnail"
-                item["file_url"] = f"/api/studio/content/{item['content_id']}/file"
+                item["thumbnail_url"] = _with_app_base(f"/api/studio/content/{item['content_id']}/thumbnail")
+                item["file_url"] = _with_app_base(f"/api/studio/content/{item['content_id']}/file")
 
             return jsonify({
                 "success": True,
@@ -345,8 +375,8 @@ def create_studio_routes(
             )
 
             # Add URLs
-            created["file_url"] = f"/api/studio/content/{created['content_id']}/file"
-            created["thumbnail_url"] = f"/api/studio/content/{created['content_id']}/thumbnail"
+            created["file_url"] = _with_app_base(f"/api/studio/content/{created['content_id']}/file")
+            created["thumbnail_url"] = _with_app_base(f"/api/studio/content/{created['content_id']}/thumbnail")
 
             return jsonify({
                 "success": True,
@@ -393,8 +423,8 @@ def create_studio_routes(
                 }), 404
 
             # Add URLs
-            content["file_url"] = f"/api/studio/content/{content_id}/file"
-            content["thumbnail_url"] = f"/api/studio/content/{content_id}/thumbnail"
+            content["file_url"] = _with_app_base(f"/api/studio/content/{content_id}/file")
+            content["thumbnail_url"] = _with_app_base(f"/api/studio/content/{content_id}/thumbnail")
 
             return jsonify({
                 "success": True,

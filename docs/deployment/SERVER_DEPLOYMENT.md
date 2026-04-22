@@ -4,7 +4,7 @@ This guide is **Linux-focused** (Ubuntu, Azure VM, AWS EC2, etc.).
 
 For Windows/macOS workflows and service alternatives, start with [Cross-Platform Deployment](CROSS_PLATFORM_DEPLOYMENT.md).
 
-Deploy DBNotebook on Linux using `scripts/sh/dev.sh local` for development or `scripts/sh/prod.sh start` for production process management.
+Deploy DBNotebook on Linux using `bash ./scripts/sh/dev.sh local` for development or `bash ./scripts/sh/prod.sh start` for production process management.
 
 ## Table of Contents
 
@@ -83,7 +83,7 @@ cd frontend && npm install && npm run build && cd ..
 PYTHONPATH=. alembic upgrade head
 
 # 9. Start application
-./scripts/sh/dev.sh local  # Development mode
+bash ./scripts/sh/dev.sh local  # Development mode
 # OR
 gunicorn -w 4 -b 0.0.0.0:7860 "dbnotebook.ui.web:create_app()"  # Production
 ```
@@ -135,7 +135,7 @@ sudo su - dbnotebook
 
 ### Create Azure VM
 
-1. **Portal**: Create VM → Ubuntu 22.04 LTS → Standard_D2s_v3 (2 vCPU, 8 GB) or larger
+1. **Portal**: Create VM -> Ubuntu 22.04 LTS -> Standard_D2s_v3 (2 vCPU, 8 GB) or larger
 2. **Networking**: Open ports 22 (SSH), 80 (HTTP), 443 (HTTPS), 7860 (optional for direct access)
 3. **Storage**: 64 GB Premium SSD recommended
 
@@ -379,22 +379,22 @@ Use `scripts/sh/prod.sh` for production deployments on Linux servers:
 cd /opt/dbnotebook
 
 # Start in background
-./scripts/sh/prod.sh start
+bash ./scripts/sh/prod.sh start
 
 # Check status
-./scripts/sh/prod.sh status
+bash ./scripts/sh/prod.sh status
 
 # View logs
-./scripts/sh/prod.sh logs
+bash ./scripts/sh/prod.sh logs
 
 # Stop
-./scripts/sh/prod.sh stop
+bash ./scripts/sh/prod.sh stop
 
 # Restart
-./scripts/sh/prod.sh restart
+bash ./scripts/sh/prod.sh restart
 
 # Health check
-./scripts/sh/prod.sh health
+bash ./scripts/sh/prod.sh health
 ```
 
 **What scripts/sh/prod.sh does:**
@@ -435,7 +435,7 @@ For production, use `scripts/sh/prod.sh` which runs Flask with threading. This p
 
 ```bash
 # Start application in background
-./scripts/sh/prod.sh start
+bash ./scripts/sh/prod.sh start
 
 # The script handles:
 # - Environment loading
@@ -875,3 +875,4 @@ psql -h localhost -U dbnotebook -d dbnotebook_dev -c "SELECT COUNT(*) FROM data_
 # Restart after config changes
 sudo systemctl daemon-reload && sudo systemctl restart dbnotebook
 ```
+

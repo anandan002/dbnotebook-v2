@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Database, X, Trash2 } from 'lucide-react';
+import { withBasePath } from '../../utils/paths';
 
 interface Connection {
   connection_id: string;
@@ -22,7 +23,7 @@ export function ConnectionManagement() {
   const fetchConnections = useCallback(async () => {
     try {
       // Use the SQL Chat connections endpoint
-      const response = await fetch('/api/sql-chat/connections', {
+      const response = await fetch(withBasePath('/api/sql-chat/connections'), {
         credentials: 'include',
       });
       const data = await response.json();
@@ -51,7 +52,7 @@ export function ConnectionManagement() {
     }
 
     try {
-      const response = await fetch(`/api/sql-chat/connections/${connectionId}`, {
+      const response = await fetch(withBasePath(`/api/sql-chat/connections/${connectionId}`), {
         method: 'DELETE',
         credentials: 'include',
       });

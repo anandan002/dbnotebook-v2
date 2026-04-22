@@ -106,17 +106,48 @@ psql -d dbnotebook_dev -c "CREATE EXTENSION IF NOT EXISTS vector;"
      -BootstrapPythonExe "C:\tools\python-3.11.9\python.exe"
    ```
 
-3. **Check service log first**:
+3. **Run status and health checks first**:
    ```powershell
-   Get-Content .\logs\windows-service.log -Tail 200
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Status
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Health
+   ```
+   - `Status` includes `StartupPhase`, `StartupState`, `FrontendBuildState`, `LastErrorHint`, and base-path diagnostics (`ConfiguredBasePath`, `ConfiguredBaseSource`, `EffectiveBasePath`).
+
+4. **Understand startup timing**:
+   - `-Action Start` waits until the app is healthy (`/api/health=ok`) or timeout.
+   - Adjust wait behavior if needed:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Start -StartTimeoutSec 1200 -HealthPollSec 5
    ```
 
-4. **Verify alembic executable exists in venv**:
+5. **Review both logs**:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Logs -TailLines 200
+   ```
+
+   - `logs\windows-service.log` shows service/bootstrap phases.
+   - `logs\windows-app.log` shows runtime app output.
+   - Service log phase markers: `PHASE=VENV`, `PHASE=MIGRATIONS`, `PHASE=FRONTEND_NPM_CI`, `PHASE=FRONTEND_BUILD`, `PHASE=APP_START`.
+
+6. **If UI assets load from `/assets/*` instead of `/dbnotebook/assets/*`**:
+   - Reinstall service with explicit subpath:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Install -FrontendBasePath "/dbnotebook" -NodeDir "C:\tools\node-v24.14.0-win-x64" -BootstrapPythonExe "C:\tools\python-3.11.9\python.exe"
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Start
+   ```
+   - Verify:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Status
+   Get-Content .\frontend\dist\index.html -TotalCount 20
+   ```
+   - Confirm script/css URLs are `/dbnotebook/assets/...`.
+
+7. **Verify alembic executable exists in venv**:
    ```powershell
    Test-Path .\venv\Scripts\alembic.exe
    ```
 
-5. **Recreate service cleanly**:
+8. **Recreate service cleanly**:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Stop
    powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Uninstall

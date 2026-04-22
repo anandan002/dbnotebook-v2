@@ -210,7 +210,7 @@ export async function uploadDocument(
 
   console.log(`[API] Uploading file: ${file.name} to notebook: ${notebookId}`);
 
-  const response = await fetch(`/upload`, {
+  const response = await fetch(withBasePath(`/upload`), {
     method: 'POST',
     body: formData,
   });
@@ -572,7 +572,7 @@ export async function searchWeb(
   query: string,
   numResults: number = 5
 ): Promise<WebSearchResponse> {
-  const response = await fetch('/api/web/search', {
+  const response = await fetch(withBasePath('/api/web/search'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -599,7 +599,7 @@ export async function previewWebUrl(
   url: string,
   maxChars: number = 500
 ): Promise<WebScrapePreviewResponse> {
-  const response = await fetch('/api/web/scrape-preview', {
+  const response = await fetch(withBasePath('/api/web/scrape-preview'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -627,7 +627,7 @@ export async function addWebSources(
   urls: string[],
   sourceName?: string
 ): Promise<WebSourceAddResponse> {
-  const response = await fetch(`/api/notebooks/${notebookId}/web-sources`, {
+  const response = await fetch(withBasePath(`/api/notebooks/${notebookId}/web-sources`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -667,7 +667,7 @@ export async function getStudioGallery(options?: {
   if (options?.offset) params.set('offset', options.offset.toString());
 
   const queryString = params.toString();
-  const url = `/api/studio/gallery${queryString ? `?${queryString}` : ''}`;
+  const url = withAppBase(`/api/studio/gallery${queryString ? `?${queryString}` : ''}`);
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -684,7 +684,7 @@ export async function getStudioGallery(options?: {
 export async function generateStudioContent(
   request: StudioGenerateRequest
 ): Promise<StudioGenerateResponse> {
-  const response = await fetch('/api/studio/generate', {
+  const response = await fetch(withBasePath('/api/studio/generate'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -707,7 +707,7 @@ export async function generateStudioContent(
 export async function getStudioContent(
   contentId: string
 ): Promise<{ success: boolean; content: GeneratedContent }> {
-  const response = await fetch(`/api/studio/content/${contentId}`);
+  const response = await fetch(withBasePath(`/api/studio/content/${contentId}`));
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
@@ -724,7 +724,7 @@ export async function getStudioContent(
 export async function deleteStudioContent(
   contentId: string
 ): Promise<{ success: boolean; message: string }> {
-  const response = await fetch(`/api/studio/content/${contentId}`, {
+  const response = await fetch(withBasePath(`/api/studio/content/${contentId}`), {
     method: 'DELETE',
   });
 
@@ -741,7 +741,7 @@ export async function deleteStudioContent(
 }
 
 export async function getStudioGenerators(): Promise<StudioGeneratorsResponse> {
-  const response = await fetch('/api/studio/generators');
+  const response = await fetch(withBasePath('/api/studio/generators'));
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
@@ -782,7 +782,7 @@ export async function getConversationHistory(
   if (options?.userId) params.set('user_id', options.userId);
 
   const queryString = params.toString();
-  const url = `/api/notebooks/${notebookId}/conversations${queryString ? `?${queryString}` : ''}`;
+  const url = withAppBase(`/api/notebooks/${notebookId}/conversations${queryString ? `?${queryString}` : ''}`);
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -817,7 +817,7 @@ export async function sendChatV2Message(
   request: ChatV2Request,
   callbacks: V2ChatCallbacks
 ): Promise<void> {
-  const response = await fetch('/api/v2/chat/stream', {
+  const response = await fetch(withBasePath('/api/v2/chat/stream'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -885,7 +885,7 @@ export async function sendChatV2Message(
 export async function sendChatV2MessageSync(
   request: ChatV2Request
 ): Promise<ChatV2Response> {
-  const response = await fetch('/api/v2/chat', {
+  const response = await fetch(withBasePath('/api/v2/chat'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -919,7 +919,7 @@ export async function getChatV2History(
     limit: limit.toString(),
   });
 
-  const response = await fetch(`/api/v2/chat/history?${params}`);
+  const response = await fetch(withBasePath(`/api/v2/chat/history?${params}`));
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw {
@@ -939,7 +939,7 @@ export async function clearChatV2History(
   notebookId: string,
   userId: string
 ): Promise<{ success: boolean; cleared: number }> {
-  const response = await fetch('/api/v2/chat/history', {
+  const response = await fetch(withBasePath('/api/v2/chat/history'), {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
@@ -972,7 +972,7 @@ export async function clearChatV2History(
 export async function createQuiz(
   request: CreateQuizRequest
 ): Promise<{ quizId: string; link: string; title: string; questionSource?: string; includeCodeQuestions?: boolean }> {
-  const response = await fetch('/api/quiz/create', {
+  const response = await fetch(withBasePath('/api/quiz/create'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1012,7 +1012,7 @@ export async function createQuiz(
  * Get available LLM models for quiz question generation
  */
 export async function getQuizModels(): Promise<{ value: string; label: string }[]> {
-  const response = await fetch('/api/models');
+  const response = await fetch(withBasePath('/api/models'));
 
   if (!response.ok) {
     console.warn('Failed to fetch quiz models, using default');
@@ -1047,7 +1047,7 @@ export async function getQuizModels(): Promise<{ value: string; label: string }[
  * List all quizzes created by current user (admin)
  */
 export async function listQuizzes(): Promise<Quiz[]> {
-  const response = await fetch('/api/quiz/list');
+  const response = await fetch(withBasePath('/api/quiz/list'));
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
@@ -1079,7 +1079,7 @@ export async function listQuizzes(): Promise<Quiz[]> {
  * Get quiz results and statistics (admin)
  */
 export async function getQuizResults(quizId: string): Promise<QuizResultsResponse> {
-  const response = await fetch(`/api/quiz/${quizId}/results`);
+  const response = await fetch(withBasePath(`/api/quiz/${quizId}/results`));
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
@@ -1130,7 +1130,7 @@ export async function getQuizResults(quizId: string): Promise<QuizResultsRespons
  * Delete a quiz (admin)
  */
 export async function deleteQuiz(quizId: string): Promise<void> {
-  const response = await fetch(`/api/quiz/${quizId}`, {
+  const response = await fetch(withBasePath(`/api/quiz/${quizId}`), {
     method: 'DELETE',
   });
 
@@ -1148,7 +1148,7 @@ export async function deleteQuiz(quizId: string): Promise<void> {
  * Get public quiz info (no auth required)
  */
 export async function getQuizInfo(quizId: string): Promise<QuizPublicInfo> {
-  const response = await fetch(`/api/quiz/${quizId}/info`);
+  const response = await fetch(withBasePath(`/api/quiz/${quizId}/info`));
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
@@ -1181,7 +1181,7 @@ export async function startQuizAttempt(
   takerName: string,
   takerEmail?: string
 ): Promise<StartAttemptResponse> {
-  const response = await fetch(`/api/quiz/${quizId}/start`, {
+  const response = await fetch(withBasePath(`/api/quiz/${quizId}/start`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1232,7 +1232,7 @@ export async function submitQuizAnswer(
   attemptId: string,
   answer: 'A' | 'B' | 'C' | 'D'
 ): Promise<SubmitAnswerResponse> {
-  const response = await fetch(`/api/quiz/attempt/${attemptId}/answer`, {
+  const response = await fetch(withBasePath(`/api/quiz/attempt/${attemptId}/answer`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1278,7 +1278,7 @@ export async function submitQuizAnswer(
  * Get current status of an attempt (for resuming)
  */
 export async function getAttemptStatus(attemptId: string): Promise<AttemptStatusResponse> {
-  const response = await fetch(`/api/quiz/attempt/${attemptId}/status`);
+  const response = await fetch(withBasePath(`/api/quiz/attempt/${attemptId}/status`));
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
@@ -1316,7 +1316,7 @@ export interface SubmitFeedbackRequest {
   trace_id: string;
   query_id: string;
   notebook_id: string;
-  rating?: number;       // 1–5 star rating
+  rating?: number;       // 1-5 star rating
   helpful?: boolean;     // thumbs up/down
   user_message?: string; // free-text explanation
   feedback_category?: FeedbackCategory;
@@ -1344,7 +1344,7 @@ export interface FeedbackStats {
 export async function submitFeedback(
   request: SubmitFeedbackRequest
 ): Promise<SubmitFeedbackResponse> {
-  const response = await fetch('/api/v2/chat/feedback', {
+  const response = await fetch(withBasePath('/api/v2/chat/feedback'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1378,7 +1378,7 @@ export async function getFeedbackStats(options?: {
   if (options?.days) params.set('days', options.days.toString());
 
   const queryString = params.toString();
-  const url = `/api/v2/feedback-stats${queryString ? `?${queryString}` : ''}`;
+  const url = withAppBase(`/api/v2/feedback-stats${queryString ? `?${queryString}` : ''}`);
 
   const response = await fetch(url, { credentials: 'include' });
 
@@ -1403,7 +1403,7 @@ export async function getFeedbackStats(options?: {
  * @param days Number of days to look back (default: 30)
  */
 export async function getAdminTokenMetrics(days: number = 30): Promise<TokenMetricsResponse> {
-  const response = await fetch(`/api/admin/metrics/tokens?days=${days}`, {
+  const response = await fetch(withBasePath(`/api/admin/metrics/tokens?days=${days}`), {
     credentials: 'include',
   });
 

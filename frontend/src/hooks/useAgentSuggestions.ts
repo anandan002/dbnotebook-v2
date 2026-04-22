@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { withBasePath } from '../utils/paths';
 
 export interface QuerySuggestion {
   type: 'specificity' | 'follow_up' | 'comparison' | 'exploration' | 'action';
@@ -14,6 +15,7 @@ export interface QuerySuggestion {
 
 interface UseAgentSuggestionsOptions {
   notebookId?: string;
+  query?: string;
   enabled?: boolean;
 }
 
@@ -26,6 +28,7 @@ interface UseAgentSuggestionsReturn {
 
 export function useAgentSuggestions({
   notebookId,
+  query,
   enabled = true,
 }: UseAgentSuggestionsOptions): UseAgentSuggestionsReturn {
   const [suggestions, setSuggestions] = useState<QuerySuggestion[]>([]);
@@ -33,8 +36,11 @@ export function useAgentSuggestions({
   const [error, setError] = useState<string | null>(null);
 
   const fetchSuggestions = useCallback(async () => {
-    if (!enabled || !notebookId) {
+    const normalizedQuery = (query || '').trim();
+
+    if (!enabled || !notebookId || !normalizedQuery) {
       setSuggestions([]);
+      setError(null);
       return;
     }
 
@@ -42,11 +48,11 @@ export function useAgentSuggestions({
     setError(null);
 
     try {
-      const response = await fetch('/api/agents/refine-query', {
+      const response = await fetch(withBasePath('/api/agents/refine-query'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          query: '', // Empty query to get general suggestions
+          query: normalizedQuery,
           notebook_context: { notebook_id: notebookId },
         }),
       });
@@ -69,7 +75,7 @@ export function useAgentSuggestions({
     } finally {
       setIsLoading(false);
     }
-  }, [notebookId, enabled]);
+  }, [notebookId, query, enabled]);
 
   // Fetch suggestions when notebook changes
   useEffect(() => {
@@ -100,7 +106,7 @@ export function useQueryAnalysis() {
     setIsAnalyzing(true);
 
     try {
-      const response = await fetch('/api/agents/analyze-query', {
+      const response = await fetch(withBasePath('/api/agents/analyze-query'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query }),

@@ -21,6 +21,7 @@ import {
 
 import { useSQLChat } from '../../contexts/SQLChatContext';
 import { useApp } from '../../contexts/AppContext';
+import { withBasePath } from '../../utils/paths';
 import { DatabaseConnectionForm } from './DatabaseConnectionForm';
 import { ConnectionList } from './ConnectionList';
 import { SchemaExplorer } from './SchemaExplorer';
@@ -114,7 +115,7 @@ export function SQLChatPage() {
 
     setIsRegeneratingDict(true);
     try {
-      const response = await fetch(`/api/sql-chat/connections/${activeConnection.id}/dictionary/regenerate`, {
+      const response = await fetch(withBasePath(`/api/sql-chat/connections/${activeConnection.id}/dictionary/regenerate`), {
         method: 'POST',
       });
       const data = await response.json();

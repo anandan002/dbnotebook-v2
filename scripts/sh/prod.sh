@@ -1,6 +1,6 @@
 #!/bin/bash
 # DBNotebook Production Script (Linux)
-# Usage: ./scripts/sh/prod.sh [start|stop|restart|status|logs]
+# Usage: bash ./scripts/sh/prod.sh [start|stop|restart|status|logs]
 
 set -e
 
@@ -116,14 +116,24 @@ activate_venv() {
 
 # Build frontend
 build_frontend() {
-    if [ -d "$SCRIPT_DIR/frontend" ]; then
-        print_status "Building frontend..."
-        cd "$SCRIPT_DIR/frontend"
-        npm install --silent
-        npm run build
-        cd "$SCRIPT_DIR"
-        print_success "Frontend built"
+    if [ ! -d "$SCRIPT_DIR/frontend" ]; then
+        print_error "Frontend directory not found: $SCRIPT_DIR/frontend"
+        exit 1
     fi
+    if ! command -v npm >/dev/null 2>&1; then
+        print_error "npm is required to build frontend assets but was not found in PATH"
+        exit 1
+    fi
+    print_status "Building frontend..."
+    cd "$SCRIPT_DIR/frontend"
+    npm install --silent
+    npm run build
+    cd "$SCRIPT_DIR"
+    if [ ! -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
+        print_error "Frontend build output missing (expected frontend/dist/index.html)"
+        exit 1
+    fi
+    print_success "Frontend built"
 }
 
 # Run database migrations
@@ -144,7 +154,7 @@ start_app() {
     if is_running; then
         PID=$(get_pid)
         print_warning "$APP_NAME is already running (PID: $PID)"
-        echo "  Stop with: ./scripts/sh/prod.sh stop"
+        echo "  Stop with: bash ./scripts/sh/prod.sh stop"
         return 1
     fi
 
@@ -180,9 +190,9 @@ start_app() {
         echo ""
         echo -e "  ${BLUE}URL:${NC}     http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):$APP_PORT"
         echo -e "  ${BLUE}PID:${NC}     $PID"
-        echo -e "  ${BLUE}Logs:${NC}    ./scripts/sh/prod.sh logs"
-        echo -e "  ${BLUE}Status:${NC}  ./scripts/sh/prod.sh status"
-        echo -e "  ${BLUE}Stop:${NC}    ./scripts/sh/prod.sh stop"
+        echo -e "  ${BLUE}Logs:${NC}    bash ./scripts/sh/prod.sh logs"
+        echo -e "  ${BLUE}Status:${NC}  bash ./scripts/sh/prod.sh status"
+        echo -e "  ${BLUE}Stop:${NC}    bash ./scripts/sh/prod.sh stop"
         echo ""
     else
         print_error "Failed to start $APP_NAME"
@@ -345,7 +355,7 @@ show_help() {
     echo ""
     echo -e "${BLUE}DBNotebook Production Script${NC}"
     echo ""
-    echo "Usage: ./scripts/sh/prod.sh [command]"
+    echo "Usage: bash ./scripts/sh/prod.sh [command]"
     echo ""
     echo "Commands:"
     echo "  start       Start the application in background"

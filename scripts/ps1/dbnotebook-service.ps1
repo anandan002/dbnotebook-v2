@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Install", "Start", "Stop", "Status", "Uninstall", "RunService")]
+    [ValidateSet("Install", "Start", "Stop", "Status", "Uninstall", "RunService", "Logs", "Health")]
     [string]$Action,
 
     [string]$ServiceName = "DBNotebook",
@@ -16,11 +16,15 @@ param(
     [Alias("Host")]
     [string]$ListenHost = "0.0.0.0",
     [int]$Port = 7860,
+    [int]$TailLines = 200,
+    [int]$StartTimeoutSec = 900,
+    [int]$HealthPollSec = 5,
     [string]$EnvFile
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:HasExplicitFrontendBasePath = $PSBoundParameters.ContainsKey("FrontendBasePath")
 
 if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -54,6 +58,56 @@ function Write-Warn {
 function Write-Err {
     param([string]$Message)
     Write-Host "[ERROR] $Message" -ForegroundColor Red
+}
+
+function Get-LogPaths {
+    param([string]$RepoPath)
+
+    $logDir = Join-Path $RepoPath "logs"
+    [PSCustomObject]@{
+        LogDir     = $logDir
+        ServiceLog = Join-Path $logDir "windows-service.log"
+        AppLog     = Join-Path $logDir "windows-app.log"
+    }
+}
+
+function Ensure-LogDirectory {
+    param([string]$RepoPath)
+
+    $paths = Get-LogPaths -RepoPath $RepoPath
+    if (-not (Test-Path -LiteralPath $paths.LogDir)) {
+        New-Item -ItemType Directory -Path $paths.LogDir -Force | Out-Null
+    }
+    return $paths
+}
+
+function Write-ServiceLog {
+    param(
+        [string]$LogPath,
+        [string]$Message,
+        [string]$Level = "INFO"
+    )
+
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss.fff")
+    $line = "[$timestamp] [$Level] $Message"
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+}
+
+function Write-PhaseLog {
+    param(
+        [string]$LogPath,
+        [string]$Phase,
+        [string]$State,
+        [string]$Message = "",
+        [string]$Level = "INFO"
+    )
+
+    $payload = "PHASE=$Phase STATE=$State"
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        $payload += " MESSAGE=$Message"
+    }
+
+    Write-ServiceLog -LogPath $LogPath -Message $payload -Level $Level
 }
 
 function Ensure-Admin {
@@ -262,6 +316,54 @@ function Normalize-FrontendBasePath {
     return $candidate
 }
 
+function Get-EnvMapValue {
+    param(
+        [System.Collections.IDictionary]$EnvVars,
+        [string]$Key
+    )
+
+    if ($null -eq $EnvVars) {
+        return $null
+    }
+
+    foreach ($entry in $EnvVars.GetEnumerator()) {
+        if ([string]::Equals([string]$entry.Key, $Key, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return [string]$entry.Value
+        }
+    }
+
+    return $null
+}
+
+function Resolve-ConfiguredBasePath {
+    param(
+        [string]$ArgumentValue,
+        [bool]$HasExplicitArgument,
+        [string]$EnvironmentValue
+    )
+
+    if ($HasExplicitArgument) {
+        $normalized = Normalize-FrontendBasePath -PathValue $ArgumentValue
+        return [PSCustomObject]@{
+            BasePath = $normalized
+            Source   = "service_arg"
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($EnvironmentValue)) {
+        $normalized = Normalize-FrontendBasePath -PathValue $EnvironmentValue
+        return [PSCustomObject]@{
+            BasePath = $normalized
+            Source   = "env"
+        }
+    }
+
+    return [PSCustomObject]@{
+        BasePath = "/"
+        Source   = "default"
+    }
+}
+
 function Set-ServiceEnvironment {
     param(
         [string]$Path,
@@ -316,6 +418,41 @@ function Load-ServiceEnvironment {
     return $loaded
 }
 
+function Get-ServiceEnvironmentMap {
+    param([string]$RegistryPath)
+
+    $loaded = [ordered]@{}
+    $raw = (Get-ItemProperty -Path $RegistryPath -Name "Environment" -ErrorAction SilentlyContinue).Environment
+    if ($null -eq $raw) {
+        return $loaded
+    }
+
+    $entries = @()
+    if ($raw -is [string]) {
+        $entries += $raw
+    }
+    else {
+        $entries += $raw
+    }
+
+    foreach ($entry in $entries) {
+        if ([string]::IsNullOrWhiteSpace($entry)) {
+            continue
+        }
+
+        $idx = $entry.IndexOf("=")
+        if ($idx -le 0) {
+            continue
+        }
+
+        $key = $entry.Substring(0, $idx)
+        $value = $entry.Substring($idx + 1)
+        $loaded[$key] = $value
+    }
+
+    return $loaded
+}
+
 function Assert-Prerequisites {
     param(
         [string]$RepoPath,
@@ -353,6 +490,38 @@ function Assert-Prerequisites {
     $frontendPath = Join-Path $RepoPath "frontend"
     if (-not (Test-Path -LiteralPath $frontendPath)) {
         throw "Frontend folder not found: $frontendPath"
+    }
+}
+
+function Assert-FrontendBuildOutput {
+    param(
+        [string]$RepoPath,
+        [string]$ExpectedBasePath = "/"
+    )
+
+    $distPath = Join-Path $RepoPath "frontend\dist"
+    $indexPath = Join-Path $distPath "index.html"
+
+    if (-not (Test-Path -LiteralPath $distPath)) {
+        throw "Frontend build output directory not found: $distPath"
+    }
+
+    if (-not (Test-Path -LiteralPath $indexPath)) {
+        throw "Frontend build output is incomplete (missing $indexPath)"
+    }
+
+    $normalizedExpectedBasePath = Normalize-FrontendBasePath -PathValue $ExpectedBasePath
+    $indexHtml = Get-Content -LiteralPath $indexPath -Raw
+
+    if ($normalizedExpectedBasePath -ne "/") {
+        $expectedPrefix = "$normalizedExpectedBasePath/assets/"
+        if ($indexHtml -notmatch [Regex]::Escape($expectedPrefix)) {
+            throw "Frontend build output base-path mismatch: expected asset prefix '$expectedPrefix' in $indexPath"
+        }
+
+        if ($indexHtml -match '(?:src|href)=["'']/assets/') {
+            throw "Frontend build output contains root /assets paths while expected base path is '$normalizedExpectedBasePath'."
+        }
     }
 }
 
@@ -514,25 +683,68 @@ function Invoke-LoggedCommand {
         [string]$FilePath,
         [string[]]$Arguments,
         [string]$StepName,
-        [string]$LogPath
+        [string]$LogPath,
+        [string]$PhaseName = ""
     )
 
-    Write-Info "$StepName..."
-    $previousErrorActionPreference = $ErrorActionPreference
+    if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
+        Write-ServiceLog -LogPath $LogPath -Message $StepName
+        if (-not [string]::IsNullOrWhiteSpace($PhaseName)) {
+            Write-PhaseLog -LogPath $LogPath -Phase $PhaseName -State "START" -Message $StepName
+        }
+    }
+    else {
+        Write-Info "$StepName..."
+    }
+
+    $stdoutPath = Join-Path $env:TEMP ("dbnotebook-cmd-out-{0}.log" -f ([guid]::NewGuid().ToString("N")))
+    $stderrPath = Join-Path $env:TEMP ("dbnotebook-cmd-err-{0}.log" -f ([guid]::NewGuid().ToString("N")))
     $exitCode = 1
     try {
-        # Many CLIs (alembic/pip/npm) write diagnostics to stderr even on success.
-        # Rely on process exit code instead of PowerShell stderr semantics.
-        $ErrorActionPreference = "Continue"
-        & $FilePath @Arguments 2>&1 | Out-Host
-        $exitCode = $LASTEXITCODE
+        $proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments -Wait -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $exitCode = [int]$proc.ExitCode
+
+        if (Test-Path -LiteralPath $stdoutPath) {
+            foreach ($line in Get-Content -LiteralPath $stdoutPath) {
+                if ([string]::IsNullOrWhiteSpace($LogPath)) {
+                    Write-Host $line
+                }
+                else {
+                    Write-ServiceLog -LogPath $LogPath -Level "CMD" -Message $line
+                }
+            }
+        }
+        if (Test-Path -LiteralPath $stderrPath) {
+            foreach ($line in Get-Content -LiteralPath $stderrPath) {
+                if ([string]::IsNullOrWhiteSpace($LogPath)) {
+                    Write-Host $line
+                }
+                else {
+                    Write-ServiceLog -LogPath $LogPath -Level "CMDERR" -Message $line
+                }
+            }
+        }
     }
     finally {
-        $ErrorActionPreference = $previousErrorActionPreference
+        Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
     }
 
     if ($exitCode -ne 0) {
+        if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
+            Write-ServiceLog -LogPath $LogPath -Level "ERROR" -Message "$StepName failed with exit code $exitCode."
+            if (-not [string]::IsNullOrWhiteSpace($PhaseName)) {
+                Write-PhaseLog -LogPath $LogPath -Phase $PhaseName -State "ERROR" -Message "$StepName failed with exit code $exitCode." -Level "ERROR"
+            }
+        }
         throw "$StepName failed with exit code $exitCode."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
+        Write-ServiceLog -LogPath $LogPath -Message "$StepName completed."
+        if (-not [string]::IsNullOrWhiteSpace($PhaseName)) {
+            Write-PhaseLog -LogPath $LogPath -Phase $PhaseName -State "DONE" -Message "$StepName completed."
+        }
     }
 }
 
@@ -553,12 +765,21 @@ function Install-ServiceAction {
         throw "No KEY=VALUE pairs were parsed from: $EnvFile"
     }
 
-    $serviceArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Action RunService -ServiceName `"$ServiceName`" -RepoRoot `"$RepoRoot`" -PythonExe `"$PythonExe`" -NssmExe `"$script:NssmExe`" -NodeDir `"$NodeDir`" -BootstrapPythonExe `"$BootstrapPythonExe`" -FrontendBasePath `"$FrontendBasePath`" -ListenHost `"$ListenHost`" -Port $Port"
-    $logDir = Join-Path $RepoRoot "logs"
-    if (-not (Test-Path -LiteralPath $logDir)) {
-        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    $envBasePath = Get-EnvMapValue -EnvVars $envVars -Key "DBNOTEBOOK_BASE_PATH"
+    $resolvedBasePath = Resolve-ConfiguredBasePath -ArgumentValue $FrontendBasePath -HasExplicitArgument $script:HasExplicitFrontendBasePath -EnvironmentValue $envBasePath
+    Write-Info "Install base path resolved to '$($resolvedBasePath.BasePath)' (source=$($resolvedBasePath.Source))."
+    if ($resolvedBasePath.BasePath -eq "/") {
+        Write-Warn "Frontend base path resolved to '/'. If this deployment is behind a subpath (example '/dbnotebook'), pass -FrontendBasePath '/dbnotebook' or set DBNOTEBOOK_BASE_PATH in .env."
     }
-    $runtimeLog = Join-Path $logDir "windows-service.log"
+
+    # Persist resolved base path into service environment so runtime/frontend build always uses it.
+    $envVars["DBNOTEBOOK_BASE_PATH"] = $resolvedBasePath.BasePath
+    $envVars["VITE_APP_BASE_PATH"] = if ($resolvedBasePath.BasePath -eq "/") { "/" } else { "$($resolvedBasePath.BasePath)/" }
+
+    $serviceArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Action RunService -ServiceName `"$ServiceName`" -RepoRoot `"$RepoRoot`" -PythonExe `"$PythonExe`" -NssmExe `"$script:NssmExe`" -NodeDir `"$NodeDir`" -BootstrapPythonExe `"$BootstrapPythonExe`" -ListenHost `"$ListenHost`" -Port $Port"
+    $serviceArgs += " -FrontendBasePath `"$($resolvedBasePath.BasePath)`""
+    $logs = Ensure-LogDirectory -RepoPath $RepoRoot
+    $runtimeLog = $logs.ServiceLog
 
     if (Test-ServiceExists -Name $ServiceName) {
         Write-Warn "Service '$ServiceName' already exists. Recreating with NSSM wrapper."
@@ -596,8 +817,25 @@ function Start-ServiceAction {
         throw "Service '$ServiceName' does not exist. Run Install first."
     }
 
-    Start-Service -Name $ServiceName -ErrorAction Stop
-    Write-Info "Service '$ServiceName' start requested."
+    $svc = Get-Service -Name $ServiceName -ErrorAction Stop
+    if ($svc.Status -ne "Running") {
+        Start-Service -Name $ServiceName -ErrorAction Stop
+        Write-Info "Service '$ServiceName' start requested."
+    }
+    else {
+        Write-Warn "Service '$ServiceName' is already running. Validating readiness..."
+    }
+
+    if ($HealthPollSec -lt 1) {
+        throw "-HealthPollSec must be at least 1."
+    }
+    if ($StartTimeoutSec -lt $HealthPollSec) {
+        throw "-StartTimeoutSec must be greater than or equal to -HealthPollSec."
+    }
+
+    Write-Info "Waiting for readiness (timeout=${StartTimeoutSec}s, poll=${HealthPollSec}s)..."
+    $readyDiag = Wait-ServiceReady -Name $ServiceName -ApiPort $Port -RepoPath $RepoRoot -TimeoutSec $StartTimeoutSec -PollSec $HealthPollSec
+    Write-Info "Service '$ServiceName' is healthy (app pid=$($readyDiag.AppProcessId), port=$Port, /api/health=ok)."
 }
 
 function Stop-ServiceAction {
@@ -610,22 +848,368 @@ function Stop-ServiceAction {
     Write-Info "Service '$ServiceName' stop requested."
 }
 
+function Get-ServiceDescendantProcesses {
+    param([int]$RootPid)
+
+    if ($RootPid -le 0) {
+        return @()
+    }
+
+    $all = Get-CimInstance Win32_Process
+    $byParent = @{}
+    foreach ($proc in $all) {
+        $parentKey = [int]$proc.ParentProcessId
+        if (-not $byParent.ContainsKey($parentKey)) {
+            $byParent[$parentKey] = New-Object System.Collections.ArrayList
+        }
+        [void]$byParent[$parentKey].Add($proc)
+    }
+
+    $queue = New-Object System.Collections.Generic.Queue[int]
+    $queue.Enqueue($RootPid)
+    $result = New-Object System.Collections.ArrayList
+
+    while ($queue.Count -gt 0) {
+        $currentPid = $queue.Dequeue()
+        if ($byParent.ContainsKey($currentPid)) {
+            foreach ($child in $byParent[$currentPid]) {
+                [void]$result.Add($child)
+                $queue.Enqueue([int]$child.ProcessId)
+            }
+        }
+    }
+
+    return $result.ToArray()
+}
+
+function Test-PortListening {
+    param([int]$LocalPort)
+
+    try {
+        $conn = Get-NetTCPConnection -State Listen -LocalPort $LocalPort -ErrorAction Stop | Select-Object -First 1
+        return ($null -ne $conn)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-ApiHealthState {
+    param([int]$ApiPort)
+
+    $url = "http://127.0.0.1:$ApiPort/api/health"
+    try {
+        $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        if ($resp.StatusCode -ne 200) {
+            return "http_$($resp.StatusCode)"
+        }
+
+        $payload = $null
+        try {
+            $payload = $resp.Content | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            return "invalid_json"
+        }
+
+        if ($null -ne $payload -and $payload.status -eq "ok") {
+            return "ok"
+        }
+
+        return "unexpected_payload"
+    }
+    catch {
+        return "unreachable"
+    }
+}
+
+function Get-LogFileLastWrite {
+    param([string]$Path)
+
+    if (Test-Path -LiteralPath $Path) {
+        return (Get-Item -LiteralPath $Path).LastWriteTime
+    }
+    return $null
+}
+
+function Get-ServiceLogPhaseSummary {
+    param([string]$ServiceLogPath)
+
+    $summary = [ordered]@{
+        StartupPhase          = "unknown"
+        StartupState          = "unknown"
+        StartupPhaseMessage   = $null
+        FrontendNpmCiState    = "unknown"
+        FrontendBuildState    = "unknown"
+        LastFrontendBuildTime = $null
+        LastErrorHint         = $null
+    }
+
+    if (-not (Test-Path -LiteralPath $ServiceLogPath)) {
+        return [PSCustomObject]$summary
+    }
+
+    $phaseRegex = [Regex]'PHASE=(?<phase>[A-Z_]+)\s+STATE=(?<state>[A-Z_]+)(?:\s+MESSAGE=(?<msg>.*))?'
+    $timestampRegex = [Regex]'^\[(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]'
+    $lines = Get-Content -LiteralPath $ServiceLogPath -Tail 800
+    $serviceBootStartIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match 'PHASE=SERVICE_BOOT\s+STATE=START') {
+            $serviceBootStartIndex = $i
+        }
+    }
+    $effectiveLines = if ($serviceBootStartIndex -ge 0) {
+        $lines[$serviceBootStartIndex..($lines.Count - 1)]
+    }
+    else {
+        $lines
+    }
+
+    foreach ($line in $effectiveLines) {
+        $phaseMatch = $phaseRegex.Match($line)
+        if ($phaseMatch.Success) {
+            $phase = $phaseMatch.Groups["phase"].Value
+            $state = $phaseMatch.Groups["state"].Value
+            $msg = $phaseMatch.Groups["msg"].Value
+
+            $summary.StartupPhase = $phase
+            $summary.StartupState = $state
+            $summary.StartupPhaseMessage = if ([string]::IsNullOrWhiteSpace($msg)) { $null } else { $msg }
+
+            if ($phase -eq "FRONTEND_BUILD") {
+                $summary.FrontendBuildState = $state
+                $tsMatch = $timestampRegex.Match($line)
+                if ($tsMatch.Success) {
+                    try {
+                        $summary.LastFrontendBuildTime = [datetime]::ParseExact($tsMatch.Groups["ts"].Value, "yyyy-MM-dd HH:mm:ss.fff", [System.Globalization.CultureInfo]::InvariantCulture)
+                    }
+                    catch {}
+                }
+            }
+            elseif ($phase -eq "FRONTEND_NPM_CI") {
+                $summary.FrontendNpmCiState = $state
+            }
+        }
+
+        if ($line -match '\[ERROR\]' -or $line -match 'STATE=ERROR') {
+            $summary.LastErrorHint = $line
+        }
+    }
+
+    return [PSCustomObject]$summary
+}
+
+function Get-ServiceDiagnostics {
+    param(
+        [string]$Name,
+        [int]$ApiPort,
+        [string]$RepoPath
+    )
+
+    if (-not (Test-ServiceExists -Name $Name)) {
+        return [PSCustomObject]@{
+            ServiceExists = $false
+            ServiceName   = $Name
+        }
+    }
+
+    $svc = Get-Service -Name $Name -ErrorAction Stop
+    $wmi = Get-CimInstance Win32_Service -Filter "Name='$Name'"
+    if ($null -eq $wmi) {
+        return [PSCustomObject]@{
+            ServiceExists = $true
+            Name          = $svc.Name
+            Status        = $svc.Status.ToString()
+            StartType     = "Unknown"
+            Account       = "Unknown"
+            PathName      = $null
+            ServiceProcessId = $null
+            AppProcessId     = $null
+            AppCommandLine   = $null
+            Port             = $ApiPort
+            PortListening    = $false
+            ApiHealth        = "unreachable"
+        }
+    }
+    $servicePid = [int]$wmi.ProcessId
+    $descendants = Get-ServiceDescendantProcesses -RootPid $servicePid
+    $appProc = $descendants | Where-Object {
+        ($_.Name -ieq "python.exe" -or $_.Name -ieq "pythonw.exe") -and
+        ($_.CommandLine -match '(?i)-m\s+dbnotebook')
+    } | Select-Object -First 1
+
+    $logPaths = Get-LogPaths -RepoPath $RepoPath
+    $frontendDistIndexPath = Join-Path $RepoPath "frontend\dist\index.html"
+    $frontendDistIndexExists = Test-Path -LiteralPath $frontendDistIndexPath
+    $portListening = Test-PortListening -LocalPort $ApiPort
+    $apiHealth = Get-ApiHealthState -ApiPort $ApiPort
+    $phaseSummary = Get-ServiceLogPhaseSummary -ServiceLogPath $logPaths.ServiceLog
+    $serviceEnvMap = Get-ServiceEnvironmentMap -RegistryPath $ServiceRegPath
+    $envBasePath = Get-EnvMapValue -EnvVars $serviceEnvMap -Key "DBNOTEBOOK_BASE_PATH"
+
+    $appParameters = ""
+    if (Test-Path -LiteralPath $NssmExe) {
+        try {
+            $appParametersRaw = & $NssmExe get $Name AppParameters 2>$null
+            if ($LASTEXITCODE -eq 0 -and $null -ne $appParametersRaw) {
+                $appParameters = ($appParametersRaw -join " ") -replace "`0", ""
+            }
+        }
+        catch {}
+    }
+
+    $argBasePath = $null
+    if ($appParameters -match '(?i)-FrontendBasePath\s+"?([^"\s]+)"?') {
+        $argBasePath = $matches[1]
+    }
+    $baseResolution = Resolve-ConfiguredBasePath -ArgumentValue $argBasePath -HasExplicitArgument (-not [string]::IsNullOrWhiteSpace($argBasePath)) -EnvironmentValue $envBasePath
+
+    return [PSCustomObject]@{
+        ServiceExists        = $true
+        Name                 = $svc.Name
+        Status               = $svc.Status.ToString()
+        StartType            = $wmi.StartMode
+        Account              = $wmi.StartName
+        PathName             = $wmi.PathName
+        ServiceProcessId     = $servicePid
+        AppProcessId         = if ($null -ne $appProc) { [int]$appProc.ProcessId } else { $null }
+        AppCommandLine       = if ($null -ne $appProc) { $appProc.CommandLine } else { $null }
+        Port                 = $ApiPort
+        PortListening        = $portListening
+        ApiHealth            = $apiHealth
+        ServiceLogPath       = $logPaths.ServiceLog
+        ServiceLogLastWrite  = Get-LogFileLastWrite -Path $logPaths.ServiceLog
+        AppLogPath           = $logPaths.AppLog
+        AppLogLastWrite      = Get-LogFileLastWrite -Path $logPaths.AppLog
+        StartupPhase         = $phaseSummary.StartupPhase
+        StartupState         = $phaseSummary.StartupState
+        StartupPhaseMessage  = $phaseSummary.StartupPhaseMessage
+        FrontendNpmCiState   = $phaseSummary.FrontendNpmCiState
+        FrontendBuildState   = $phaseSummary.FrontendBuildState
+        LastFrontendBuildTime = $phaseSummary.LastFrontendBuildTime
+        FrontendDistIndexPath = $frontendDistIndexPath
+        FrontendDistIndexExists = $frontendDistIndexExists
+        LastErrorHint        = $phaseSummary.LastErrorHint
+        ConfiguredBasePath   = $baseResolution.BasePath
+        ConfiguredBaseSource = $baseResolution.Source
+        EffectiveBasePath    = $baseResolution.BasePath
+        ServiceArgBasePath   = if ([string]::IsNullOrWhiteSpace($argBasePath)) { $null } else { Normalize-FrontendBasePath -PathValue $argBasePath }
+        EnvBasePath          = if ([string]::IsNullOrWhiteSpace($envBasePath)) { $null } else { Normalize-FrontendBasePath -PathValue $envBasePath }
+    }
+}
+
+function Wait-ServiceReady {
+    param(
+        [string]$Name,
+        [int]$ApiPort,
+        [string]$RepoPath,
+        [int]$TimeoutSec,
+        [int]$PollSec
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $diag = Get-ServiceDiagnostics -Name $Name -ApiPort $ApiPort -RepoPath $RepoPath
+        if ($diag.ServiceExists -and
+            $diag.Status -eq "Running" -and
+            $diag.AppProcessId -and
+            $diag.PortListening -and
+            $diag.ApiHealth -eq "ok") {
+            return $diag
+        }
+
+        Start-Sleep -Seconds $PollSec
+    }
+
+    $finalDiag = Get-ServiceDiagnostics -Name $Name -ApiPort $ApiPort -RepoPath $RepoPath
+    $issues = @()
+    if (-not $finalDiag.ServiceExists) {
+        $issues += "service does not exist"
+    }
+    else {
+        if ($finalDiag.Status -ne "Running") {
+            $issues += "service status is '$($finalDiag.Status)'"
+        }
+        if (-not $finalDiag.AppProcessId) {
+            $issues += "dbnotebook app process not found"
+        }
+        if (-not $finalDiag.PortListening) {
+            $issues += "port $ApiPort is not listening"
+        }
+        if ($finalDiag.ApiHealth -ne "ok") {
+            $issues += "/api/health check is '$($finalDiag.ApiHealth)'"
+        }
+    }
+
+    $phaseHint = "phase=$($finalDiag.StartupPhase)/$($finalDiag.StartupState)"
+    if ($finalDiag.StartupPhaseMessage) {
+        $phaseHint += " ($($finalDiag.StartupPhaseMessage))"
+    }
+    if ($finalDiag.LastErrorHint) {
+        $phaseHint += "; last_error='$($finalDiag.LastErrorHint)'"
+    }
+
+    throw "Service readiness timed out after ${TimeoutSec}s: $($issues -join '; '); $phaseHint"
+}
+
 function Status-ServiceAction {
-    if (-not (Test-ServiceExists -Name $ServiceName)) {
+    $diag = Get-ServiceDiagnostics -Name $ServiceName -ApiPort $Port -RepoPath $RepoRoot
+    if (-not $diag.ServiceExists) {
         Write-Warn "Service '$ServiceName' does not exist."
         return
     }
 
-    $svc = Get-Service -Name $ServiceName -ErrorAction Stop
-    $wmi = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
-    $status = [PSCustomObject]@{
-        Name      = $svc.Name
-        Status    = $svc.Status.ToString()
-        StartType = $wmi.StartMode
-        Account   = $wmi.StartName
-        PathName  = $wmi.PathName
+    $diag | Format-List | Out-Host
+    Write-Info "Frontend bootstrap phases: npm_ci=$($diag.FrontendNpmCiState), build=$($diag.FrontendBuildState)"
+    Write-Info "Frontend dist index present: $($diag.FrontendDistIndexExists) at $($diag.FrontendDistIndexPath)"
+}
+
+function Logs-ServiceAction {
+    $paths = Ensure-LogDirectory -RepoPath $RepoRoot
+
+    Write-Info "Service bootstrap log: $($paths.ServiceLog)"
+    if (Test-Path -LiteralPath $paths.ServiceLog) {
+        Get-Content -LiteralPath $paths.ServiceLog -Tail $TailLines | Out-Host
     }
-    $status | Format-List | Out-Host
+    else {
+        Write-Warn "No service log found yet."
+    }
+
+    Write-Info "App runtime log: $($paths.AppLog)"
+    if (Test-Path -LiteralPath $paths.AppLog) {
+        Get-Content -LiteralPath $paths.AppLog -Tail $TailLines | Out-Host
+    }
+    else {
+        Write-Warn "No app log found yet."
+    }
+}
+
+function Health-ServiceAction {
+    $diag = Get-ServiceDiagnostics -Name $ServiceName -ApiPort $Port -RepoPath $RepoRoot
+    if (-not $diag.ServiceExists) {
+        throw "Service '$ServiceName' does not exist."
+    }
+
+    $issues = @()
+    if ($diag.Status -ne "Running") {
+        $issues += "service status is '$($diag.Status)'"
+    }
+    if (-not $diag.AppProcessId) {
+        $issues += "dbnotebook app process not found"
+    }
+    if (-not $diag.PortListening) {
+        $issues += "port $Port is not listening"
+    }
+    if ($diag.ApiHealth -ne "ok") {
+        $issues += "/api/health check is '$($diag.ApiHealth)'"
+    }
+
+    if ($issues.Count -gt 0) {
+        $summary = $issues -join "; "
+        throw "Health check failed: $summary"
+    }
+
+    Write-Info "Health check passed (service running, process active, port $Port listening, /api/health ok)."
 }
 
 function Uninstall-ServiceAction {
@@ -661,7 +1245,7 @@ function Run-ServiceAction {
     }
 
     Set-Location -LiteralPath $RepoRoot
-    $null = Load-ServiceEnvironment -Path $ServiceRegPath
+    $serviceEnvVars = Load-ServiceEnvironment -Path $ServiceRegPath
 
     $env:PYTHONPATH = $RepoRoot
     $env:APP_PORT = "$Port"
@@ -669,46 +1253,67 @@ function Run-ServiceAction {
         $env:Path = "$NodeDir;$($env:Path)"
     }
 
-    $normalizedBasePath = Normalize-FrontendBasePath -PathValue $FrontendBasePath
+    $envBasePath = Get-EnvMapValue -EnvVars $serviceEnvVars -Key "DBNOTEBOOK_BASE_PATH"
+    $baseResolution = Resolve-ConfiguredBasePath -ArgumentValue $FrontendBasePath -HasExplicitArgument $script:HasExplicitFrontendBasePath -EnvironmentValue $envBasePath
+    $normalizedBasePath = $baseResolution.BasePath
     $env:VITE_APP_BASE_PATH = if ($normalizedBasePath -eq "/") { "/" } else { "$normalizedBasePath/" }
     $env:DBNOTEBOOK_BASE_PATH = $normalizedBasePath
 
-    $logDir = Join-Path $RepoRoot "logs"
-    if (-not (Test-Path -LiteralPath $logDir)) {
-        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-    }
-    $runtimeLog = Join-Path $logDir "windows-service.log"
+    $logs = Ensure-LogDirectory -RepoPath $RepoRoot
+    $serviceLog = $logs.ServiceLog
+    $appLog = $logs.AppLog
 
-    $script:PythonExe = Ensure-Venv -RepoPath $RepoRoot -TargetPythonExe $PythonExe -BootstrapPythonPath $BootstrapPythonExe -LogPath $runtimeLog
+    Write-PhaseLog -LogPath $serviceLog -Phase "SERVICE_BOOT" -State "START" -Message "RunService started (RepoRoot=$RepoRoot, Port=$Port)."
+    Write-ServiceLog -LogPath $serviceLog -Message "Using NodeDir: $NodeDir"
+    Write-ServiceLog -LogPath $serviceLog -Message "Using frontend base path: $normalizedBasePath (source=$($baseResolution.Source))"
+    Write-ServiceLog -LogPath $serviceLog -Message "Using VITE_APP_BASE_PATH: $($env:VITE_APP_BASE_PATH)"
+    Write-ServiceLog -LogPath $serviceLog -Message "App runtime log path: $appLog"
+
+    Write-PhaseLog -LogPath $serviceLog -Phase "VENV" -State "START" -Message "Ensuring Python virtual environment."
+    $script:PythonExe = Ensure-Venv -RepoPath $RepoRoot -TargetPythonExe $PythonExe -BootstrapPythonPath $BootstrapPythonExe -LogPath $serviceLog
+    Write-PhaseLog -LogPath $serviceLog -Phase "VENV" -State "DONE" -Message "Python virtual environment ready."
 
     $alembicExe = Get-AlembicCommand -RepoPath $RepoRoot
     if ($null -eq $alembicExe) {
+        Write-PhaseLog -LogPath $serviceLog -Phase "MIGRATIONS" -State "ERROR" -Message "alembic executable not found." -Level "ERROR"
         throw "alembic executable not found (expected venv\\Scripts\\alembic.exe)."
     }
-    Invoke-LoggedCommand -FilePath $alembicExe -Arguments @("upgrade", "head") -StepName "Running alembic migrations" -LogPath $runtimeLog
+    Invoke-LoggedCommand -FilePath $alembicExe -Arguments @("upgrade", "head") -StepName "Running alembic migrations" -LogPath $serviceLog -PhaseName "MIGRATIONS"
 
     $npm = Get-NpmCommand -PreferredNodeDir $NodeDir
     if ($null -eq $npm) {
+        Write-PhaseLog -LogPath $serviceLog -Phase "FRONTEND_NPM_CI" -State "ERROR" -Message "npm.cmd not found in required Node directory." -Level "ERROR"
         throw "npm.cmd not found in required Node directory: $NodeDir"
     }
 
     Push-Location (Join-Path $RepoRoot "frontend")
     try {
-        Invoke-LoggedCommand -FilePath $npm -Arguments @("ci") -StepName "Installing frontend dependencies (npm ci)" -LogPath $runtimeLog
-        Invoke-LoggedCommand -FilePath $npm -Arguments @("run", "build") -StepName "Building frontend assets" -LogPath $runtimeLog
+        $distPath = Join-Path $RepoRoot "frontend\dist"
+        if (Test-Path -LiteralPath $distPath) {
+            Write-ServiceLog -LogPath $serviceLog -Message "Removing existing frontend build output: frontend\\dist"
+            Remove-Item -LiteralPath $distPath -Recurse -Force
+        }
+
+        Invoke-LoggedCommand -FilePath $npm -Arguments @("ci") -StepName "Installing frontend dependencies (npm ci)" -LogPath $serviceLog -PhaseName "FRONTEND_NPM_CI"
+        Invoke-LoggedCommand -FilePath $npm -Arguments @("run", "build") -StepName "Building frontend assets" -LogPath $serviceLog -PhaseName "FRONTEND_BUILD"
     }
     finally {
         Pop-Location
     }
+    Assert-FrontendBuildOutput -RepoPath $RepoRoot -ExpectedBasePath $normalizedBasePath
+    Write-ServiceLog -LogPath $serviceLog -Message "Frontend build output verified: frontend\\dist\\index.html (base path: $normalizedBasePath)"
 
-    Write-Info "Starting DBNotebook application process."
+    Write-PhaseLog -LogPath $serviceLog -Phase "APP_START" -State "START" -Message "Starting DBNotebook application process."
     $previousErrorActionPreference = $ErrorActionPreference
     $appExitCode = 1
     try {
-        # Runtime app logs can write to stderr without indicating fatal failure.
-        # Keep service alive unless process exits non-zero.
+        # Write runtime app output into a dedicated log file for easier troubleshooting.
         $ErrorActionPreference = "Continue"
-        & $PythonExe -m dbnotebook --host $ListenHost --port $Port 2>&1 | Out-Host
+        & $PythonExe -m dbnotebook --host $ListenHost --port $Port 2>&1 | ForEach-Object {
+            $line = $_.ToString()
+            $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss.fff")
+            Add-Content -LiteralPath $appLog -Value "[$timestamp] $line" -Encoding UTF8
+        }
         $appExitCode = $LASTEXITCODE
     }
     finally {
@@ -716,8 +1321,12 @@ function Run-ServiceAction {
     }
 
     if ($appExitCode -ne 0) {
+        Write-PhaseLog -LogPath $serviceLog -Phase "APP_START" -State "ERROR" -Message "Application exited with code $appExitCode." -Level "ERROR"
+        Write-ServiceLog -LogPath $serviceLog -Level "ERROR" -Message "Application exited with code $appExitCode."
         throw "Application exited with code $appExitCode."
     }
+
+    Write-PhaseLog -LogPath $serviceLog -Phase "APP_START" -State "DONE" -Message "Application process exited cleanly."
 }
 
 try {
@@ -726,6 +1335,8 @@ try {
         "Start"     { Start-ServiceAction }
         "Stop"      { Stop-ServiceAction }
         "Status"    { Status-ServiceAction }
+        "Logs"      { Logs-ServiceAction }
+        "Health"    { Health-ServiceAction }
         "Uninstall" { Uninstall-ServiceAction }
         "RunService" { Run-ServiceAction }
         default {

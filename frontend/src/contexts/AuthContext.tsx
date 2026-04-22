@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { User, AuthState, LoginRequest, ChangePasswordRequest } from '../types/auth';
+import { withBasePath } from '../utils/paths';
 
 interface AuthContextType extends AuthState {
   // Actions
@@ -24,7 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshUser = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/auth/me', {
+      const response = await fetch(withBasePath('/api/auth/me'), {
         credentials: 'include',
       });
       const data = await response.json();
@@ -51,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (credentials: LoginRequest): Promise<boolean> => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetch(withBasePath('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(credentials),
@@ -77,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Logout
   const logout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      await fetch(withBasePath('/api/auth/logout'), { method: 'POST', credentials: 'include' });
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
@@ -88,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Change password
   const changePassword = useCallback(async (request: ChangePasswordRequest): Promise<boolean> => {
     try {
-      const response = await fetch('/api/auth/password', {
+      const response = await fetch(withBasePath('/api/auth/password'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
@@ -106,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Regenerate API key
   const regenerateApiKey = useCallback(async (): Promise<string | null> => {
     try {
-      const response = await fetch('/api/auth/api-key', {
+      const response = await fetch(withBasePath('/api/auth/api-key'), {
         method: 'POST',
         credentials: 'include',
       });

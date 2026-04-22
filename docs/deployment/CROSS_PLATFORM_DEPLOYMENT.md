@@ -10,7 +10,7 @@ For deep Linux server setup, see [Server Deployment](SERVER_DEPLOYMENT.md).
 
 | Platform | Local Development | Production Process | Service Management | Reverse Proxy |
 |----------|-------------------|--------------------|--------------------|---------------|
-| macOS / Linux | `./scripts/sh/dev.sh local` | `./scripts/sh/prod.sh start` | `prod.sh` (process manager) | Nginx/Caddy/Apache |
+| macOS / Linux | `bash ./scripts/sh/dev.sh local` | `bash ./scripts/sh/prod.sh start` | `prod.sh` (process manager) | Nginx/Caddy/Apache |
 | Windows | `.\venv\Scripts\python.exe -m dbnotebook --host 0.0.0.0 --port 7860` | `scripts/ps1/dbnotebook-service.ps1` | NSSM (via PowerShell script) | IIS/Nginx |
 
 ---
@@ -33,15 +33,15 @@ cp .env.example .env
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-./scripts/sh/dev.sh local
+bash ./scripts/sh/dev.sh local
 ```
 
 Production:
 
 ```bash
-./scripts/sh/prod.sh start
-./scripts/sh/prod.sh status
-./scripts/sh/prod.sh logs
+bash ./scripts/sh/prod.sh start
+bash ./scripts/sh/prod.sh status
+bash ./scripts/sh/prod.sh logs
 ```
 
 ---
@@ -53,6 +53,12 @@ Copy-Item .env.example .env
 py -3.11 -m venv venv
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 .\venv\Scripts\alembic.exe upgrade head
+```
+
+Manual foreground run:
+
+```powershell
+.\venv\Scripts\python.exe -m dbnotebook --host 0.0.0.0 --port 7860
 ```
 
 Install as service:
@@ -85,8 +91,21 @@ If serving under a subpath (example: `/dbnotebook`):
 
 - Set `DBNOTEBOOK_BASE_PATH=/dbnotebook` in `.env`.
 - Windows service users can additionally set `-FrontendBasePath "/dbnotebook"` during install.
+- Windows service base-path precedence is:
+  - explicit `-FrontendBasePath` argument,
+  - then `DBNOTEBOOK_BASE_PATH` from service environment,
+  - then `/`.
 
-Frontend assets are built to `frontend/dist` during startup workflows (`dev.sh`, `prod.sh`, and Windows service `RunService`).
+Verification after install/start:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\ps1\dbnotebook-service.ps1 -Action Status
+Get-Content .\frontend\dist\index.html -TotalCount 20
+```
+
+For `/dbnotebook` deployments, built asset URLs in `frontend\dist\index.html` must start with `/dbnotebook/assets/`.
+
+Frontend assets are built to `frontend/dist` during startup workflows (`start.sh`, `dev.sh`, `prod.sh`, and Windows service `RunService`).
 
 ---
 

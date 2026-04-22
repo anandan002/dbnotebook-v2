@@ -18,6 +18,7 @@ import type {
   StudyResource,
   TopicSections
 } from '../../../types/quiz';
+import { withBasePath } from '../../../utils/paths';
 
 interface ImprovementSuggestionsProps {
   attemptId: string;
@@ -35,7 +36,7 @@ export function ImprovementSuggestions({ attemptId }: ImprovementSuggestionsProp
         setLoading(true);
         setError(null);
 
-        const response = await fetch(`/api/quiz/attempt/${attemptId}/suggestions`);
+        const response = await fetch(withBasePath(`/api/quiz/attempt/${attemptId}/suggestions`));
         const data = await response.json();
 
         if (data.success) {

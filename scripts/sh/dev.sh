@@ -1,6 +1,6 @@
 #!/bin/bash
 # DBNotebook Development Script
-# Usage: ./scripts/sh/dev.sh [local|docker|stop|status|logs]
+# Usage: bash ./scripts/sh/dev.sh [local|docker|stop|status|logs]
 
 set -e
 
@@ -127,14 +127,24 @@ start_local() {
     fi
 
     # Build frontend
-    if [ -d "frontend" ]; then
-        print_status "Building frontend..."
-        cd frontend
-        npm install --silent
-        npm run build
-        cd "$SCRIPT_DIR"
-        print_success "Frontend built"
+    if [ ! -d "frontend" ]; then
+        print_error "Frontend directory not found: $SCRIPT_DIR/frontend"
+        exit 1
     fi
+    if ! command -v npm >/dev/null 2>&1; then
+        print_error "npm is required to build frontend assets but was not found in PATH"
+        exit 1
+    fi
+    print_status "Building frontend..."
+    cd frontend
+    npm install --silent
+    npm run build
+    cd "$SCRIPT_DIR"
+    if [ ! -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
+        print_error "Frontend build output missing (expected frontend/dist/index.html)"
+        exit 1
+    fi
+    print_success "Frontend built"
 
     # Run migrations
     print_status "Running database migrations..."
@@ -143,7 +153,7 @@ start_local() {
     # Start Flask
     print_success "Starting Flask on http://localhost:7860"
     echo -e "  ${YELLOW}Login:${NC} admin / admin123"
-    echo -e "  ${YELLOW}Stop:${NC}  ./scripts/sh/dev.sh stop"
+    echo -e "  ${YELLOW}Stop:${NC}  bash ./scripts/sh/dev.sh stop"
     echo ""
 
     PYTHONPATH="$SCRIPT_DIR" python3 -m dbnotebook --host 0.0.0.0 --port 7860
@@ -182,8 +192,8 @@ start_docker() {
     if curl -s http://localhost:7007/api/auth/me >/dev/null 2>&1; then
         print_success "Docker running on http://localhost:7007"
         echo -e "  ${YELLOW}Login:${NC} admin / admin123"
-        echo -e "  ${YELLOW}Logs:${NC}  ./scripts/sh/dev.sh logs"
-        echo -e "  ${YELLOW}Stop:${NC}  ./scripts/sh/dev.sh stop"
+        echo -e "  ${YELLOW}Logs:${NC}  bash ./scripts/sh/dev.sh logs"
+        echo -e "  ${YELLOW}Stop:${NC}  bash ./scripts/sh/dev.sh stop"
     else
         print_warning "Container started but health check pending..."
         echo "  Check logs: docker logs dbnotebook"
@@ -219,7 +229,7 @@ case "${1:-}" in
         ;;
     *)
         echo -e "\n${BLUE}DBNotebook Development Script${NC}\n"
-        echo "Usage: ./scripts/sh/dev.sh [command]"
+        echo "Usage: bash ./scripts/sh/dev.sh [command]"
         echo ""
         echo "Commands:"
         echo "  local, l    Start local Flask development server (port 7860)"

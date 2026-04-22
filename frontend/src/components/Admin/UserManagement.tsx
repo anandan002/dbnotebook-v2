@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Key, Lock, Copy, Check, Trash2, X } from 'lucide-react';
 import type { UserWithRoles, Role, CreateUserRequest } from '../../types/auth';
+import { withBasePath } from '../../utils/paths';
 
 export function UserManagement() {
   const [users, setUsers] = useState<UserWithRoles[]>([]);
@@ -20,7 +21,7 @@ export function UserManagement() {
 
   const fetchUsers = useCallback(async () => {
     try {
-      const response = await fetch('/api/admin/users', {
+      const response = await fetch(withBasePath('/api/admin/users'), {
         credentials: 'include',
       });
       const data = await response.json();
@@ -36,7 +37,7 @@ export function UserManagement() {
 
   const fetchRoles = useCallback(async () => {
     try {
-      const response = await fetch('/api/admin/roles', {
+      const response = await fetch(withBasePath('/api/admin/roles'), {
         credentials: 'include',
       });
       const data = await response.json();
@@ -59,7 +60,7 @@ export function UserManagement() {
 
   const handleCreateUser = async () => {
     try {
-      const response = await fetch('/api/admin/users', {
+      const response = await fetch(withBasePath('/api/admin/users'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -83,7 +84,7 @@ export function UserManagement() {
     if (!selectedUser) return;
 
     try {
-      const response = await fetch(`/api/admin/users/${selectedUser.user_id}/password`, {
+      const response = await fetch(withBasePath(`/api/admin/users/${selectedUser.user_id}/password`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -105,7 +106,7 @@ export function UserManagement() {
 
   const handleGenerateApiKey = async (userId: string) => {
     try {
-      const response = await fetch(`/api/admin/users/${userId}/api-key`, {
+      const response = await fetch(withBasePath(`/api/admin/users/${userId}/api-key`), {
         method: 'POST',
         credentials: 'include',
       });
@@ -125,7 +126,7 @@ export function UserManagement() {
     if (!confirm('Are you sure you want to delete this user?')) return;
 
     try {
-      const response = await fetch(`/api/admin/users/${userId}`, {
+      const response = await fetch(withBasePath(`/api/admin/users/${userId}`), {
         method: 'DELETE',
         credentials: 'include',
       });

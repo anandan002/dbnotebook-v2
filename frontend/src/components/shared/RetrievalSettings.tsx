@@ -12,6 +12,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { ChevronDown, ChevronUp, Sliders, Zap, TreePine, Hash, Cloud } from 'lucide-react';
+import { withBasePath } from '../../utils/paths';
 
 interface RerankerModel {
   id: string;
@@ -61,7 +62,7 @@ export function RetrievalSettings({
 
   // Fetch available models from API on mount
   useEffect(() => {
-    fetch('/api/settings/reranker')
+    fetch(withBasePath('/api/settings/reranker'))
       .then(res => res.json())
       .then(data => {
         if (data.success && data.available_models) {

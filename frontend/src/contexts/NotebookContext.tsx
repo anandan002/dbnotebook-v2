@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { Notebook } from '../types';
+import { withBasePath } from '../utils/paths';
 
 interface NotebookContextType {
   // State
@@ -32,7 +33,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      const response = await fetch('/api/notebooks');
+      const response = await fetch(withBasePath('/api/notebooks'));
 
       if (!response.ok) {
         throw new Error(`Failed to fetch notebooks: ${response.statusText}`);

@@ -31,9 +31,10 @@ import type {
   SQLChatContextValue,
   SQLQuerySettings,
 } from '../types/sqlChat';
+import { withBasePath } from '../utils/paths';
 
 // API base URL
-const API_BASE = '/api/sql-chat';
+const API_BASE = withBasePath('/api/sql-chat');
 
 // Generate unique message ID
 const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;

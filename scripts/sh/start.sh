@@ -57,6 +57,32 @@ print_info() {
     echo -e "${BLUE}→ $1${NC}"
 }
 
+# Build frontend assets and assert dist output exists
+build_frontend() {
+    if [ ! -d "frontend" ]; then
+        print_error "Frontend directory not found: $SCRIPT_DIR/frontend"
+        exit 1
+    fi
+
+    if ! command -v npm >/dev/null 2>&1; then
+        print_error "npm is required to build frontend assets but was not found in PATH"
+        exit 1
+    fi
+
+    print_info "Building frontend assets..."
+    pushd frontend >/dev/null
+    npm install --silent
+    npm run build
+    popd >/dev/null
+
+    if [ ! -f "$SCRIPT_DIR/frontend/dist/index.html" ]; then
+        print_error "Frontend build completed but dist output is missing (expected frontend/dist/index.html)"
+        exit 1
+    fi
+
+    print_success "Frontend built (frontend/dist)"
+}
+
 # =============================================================================
 # Environment Validation
 # =============================================================================
@@ -196,6 +222,10 @@ main() {
 
     # Check Ollama (if using localhost)
     check_ollama
+    echo ""
+
+    # Build frontend assets
+    build_frontend
     echo ""
 
     # Start server

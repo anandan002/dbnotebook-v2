@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Globe, User, FileText, X, Trash2 } from 'lucide-react';
 import type { NotebookAdmin } from '../../types/auth';
+import { withBasePath } from '../../utils/paths';
 
 export function NotebookManagement() {
   const [notebooks, setNotebooks] = useState<NotebookAdmin[]>([]);
@@ -13,7 +14,7 @@ export function NotebookManagement() {
 
   const fetchNotebooks = useCallback(async () => {
     try {
-      const response = await fetch('/api/admin/notebooks', {
+      const response = await fetch(withBasePath('/api/admin/notebooks'), {
         credentials: 'include',
       });
       const data = await response.json();
@@ -40,7 +41,7 @@ export function NotebookManagement() {
     if (!newNotebookName.trim()) return;
 
     try {
-      const response = await fetch('/api/admin/notebooks', {
+      const response = await fetch(withBasePath('/api/admin/notebooks'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -66,7 +67,7 @@ export function NotebookManagement() {
     }
 
     try {
-      const response = await fetch(`/api/notebooks/${notebookId}`, {
+      const response = await fetch(withBasePath(`/api/notebooks/${notebookId}`), {
         method: 'DELETE',
         credentials: 'include',
       });

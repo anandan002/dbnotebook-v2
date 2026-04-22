@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { withBasePath } from '../utils/paths';
 
 interface Notebook {
   id: string;
@@ -140,7 +141,7 @@ export function QueryPage() {
 
   // Load reranker models from API
   useEffect(() => {
-    fetch('/api/settings/reranker')
+    fetch(withBasePath('/api/settings/reranker'))
       .then(res => res.json())
       .then(data => {
         if (data.success && data.available_models) {
@@ -167,7 +168,7 @@ export function QueryPage() {
     setIsLoadingNotebooks(true);
     setError(null);
     try {
-      const res = await fetch('/api/query/notebooks', {
+      const res = await fetch(withBasePath('/api/query/notebooks'), {
         headers: {
           'X-API-Key': apiKey,
         },
@@ -222,7 +223,7 @@ export function QueryPage() {
         } : {}),
       };
 
-      const res = await fetch('/api/query', {
+      const res = await fetch(withBasePath('/api/query'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -729,8 +730,8 @@ export function QueryPage() {
                                   { key: '4_chunk_retrieval_ms', label: 'Chunk Retrieval', icon: Search, color: 'bg-green-500' },
                                   { key: '5_format_sources_ms', label: 'Format Sources', icon: FileText, color: 'bg-green-400' },
                                   { key: '6_raptor_total_ms', label: 'RAPTOR Total', icon: Layers, color: 'bg-purple-500', isParent: true },
-                                  { key: '6a_raptor_embedding_ms', label: '↳ Embedding', icon: null, color: 'bg-purple-400', isChild: true },
-                                  { key: '6b_raptor_lookup_ms', label: '↳ ANN Lookup', icon: null, color: 'bg-purple-300', isChild: true },
+                                  { key: '6a_raptor_embedding_ms', label: '-> Embedding', icon: null, color: 'bg-purple-400', isChild: true },
+                                  { key: '6b_raptor_lookup_ms', label: '-> ANN Lookup', icon: null, color: 'bg-purple-300', isChild: true },
                                   { key: '7_context_building_ms', label: 'Context Building', icon: FileText, color: 'bg-orange-500' },
                                   { key: '8_llm_completion_ms', label: 'LLM Completion', icon: Brain, color: 'bg-red-500' },
                                 ];

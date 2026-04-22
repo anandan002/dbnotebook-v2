@@ -15,7 +15,7 @@ git clone https://github.com/beedev/dbnotebook.git
 cd dbnotebook
 
 # Run the startup script (macOS/Linux)
-./scripts/sh/start.sh
+bash ./scripts/sh/start.sh
 
 # Open browser at http://localhost:7860
 ```

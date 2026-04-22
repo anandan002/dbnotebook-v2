@@ -87,7 +87,7 @@ DBNotebook is an intelligent document assistant that lets you organize documents
 # Clone and start
 git clone https://github.com/beedev/dbnotebook-v2.git
 cd dbnotebook-v2
-./scripts/sh/dev.sh local
+bash ./scripts/sh/dev.sh local
 
 # Open browser
 open http://localhost:7860

@@ -10,7 +10,7 @@ If you haven't installed yet, see [Installation](installation.md).
 
 ```bash
 cd dbnotebook
-./scripts/sh/dev.sh local
+bash ./scripts/sh/dev.sh local
 ```
 
 Windows users can run the foreground process with:

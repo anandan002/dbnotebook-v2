@@ -33,9 +33,10 @@ import type {
   ModificationState,
   ModifyResponse,
 } from '../types/analytics';
+import { withBasePath } from '../utils/paths';
 
 // API base URL
-const API_BASE = '/api/analytics';
+const API_BASE = withBasePath('/api/analytics');
 
 // Context value interface
 interface AnalyticsContextValue {
