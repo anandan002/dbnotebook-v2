@@ -215,6 +215,11 @@ class FlaskChatbotUI:
         for few-shot retrieval in Text-to-SQL. Runs in a background thread to avoid
         blocking app startup.
         """
+        auto_init = os.getenv("SQL_CHAT_AUTO_INIT_FEW_SHOT", "true").lower()
+        if auto_init in ("false", "0", "no"):
+            logger.info("Few-shot init skipped: SQL_CHAT_AUTO_INIT_FEW_SHOT=false")
+            return
+
         if not self._db_manager:
             logger.debug("Few-shot init skipped: no database manager")
             return
@@ -1406,12 +1411,23 @@ Output ONLY valid JSON, nothing else."""
                         seen.add(model["name"])
                         unique_models.append(model)
 
+                default_model = models_config.default_model
+                default_provider = models_config.default_provider
+                default_available = any(
+                    model["name"] == default_model
+                    and model["provider"].lower() == default_provider.lower()
+                    for model in unique_models
+                )
+                if not default_available and unique_models:
+                    default_model = unique_models[0]["name"]
+                    default_provider = unique_models[0]["provider"].lower()
+
                 return jsonify({
                     "success": True,
                     "models": unique_models,
                     "count": len(unique_models),
-                    "default_model": models_config.default_model,
-                    "default_provider": models_config.default_provider
+                    "default_model": default_model,
+                    "default_provider": default_provider
                 })
 
             except Exception as e:
@@ -2305,7 +2321,7 @@ Output ONLY valid JSON, nothing else."""
             """Serve React frontend assets or fallback to index.html for SPA routing."""
             # Skip API and other backend routes
             if path.startswith(('api/', 'chat', 'upload', 'clear', 'reset', 'model',
-                               'notebooks', 'documents', 'health', 'generate-image',
+                               'notebooks', 'health', 'generate-image',
                                'image/', 'images', 'clear-images', 'outputs/', 'docs')):
                 return jsonify({"error": "Not found"}), 404
 

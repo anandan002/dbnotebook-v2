@@ -14,6 +14,21 @@ export function useNotebooks() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [isLoadingDocs, setIsLoadingDocs] = useState(false);
 
+  const updateNotebookDocumentCount = useCallback((notebookId: string, count: number) => {
+    setState((prev) => ({
+      ...prev,
+      notebooks: prev.notebooks.map((notebook) =>
+        notebook.id === notebookId
+          ? { ...notebook, documentCount: count }
+          : notebook
+      ),
+      selectedNotebook:
+        prev.selectedNotebook?.id === notebookId
+          ? { ...prev.selectedNotebook, documentCount: count }
+          : prev.selectedNotebook,
+    }));
+  }, []);
+
   // Fetch all notebooks
   const fetchNotebooks = useCallback(async () => {
     setState((prev) => ({ ...prev, isLoading: true, error: null }));
@@ -44,6 +59,7 @@ export function useNotebooks() {
         try {
           const response = await api.getDocuments(notebook.id);
           setDocuments(response.documents);
+          updateNotebookDocumentCount(notebook.id, response.documents.length);
         } catch (error) {
           console.error('Failed to load documents:', error);
           setDocuments([]);
@@ -54,7 +70,7 @@ export function useNotebooks() {
         setDocuments([]);
       }
     },
-    []
+    [updateNotebookDocumentCount]
   );
 
   // Create a new notebook
@@ -144,6 +160,7 @@ export function useNotebooks() {
           // Refresh documents
           const docsResponse = await api.getDocuments(state.selectedNotebook.id);
           setDocuments(docsResponse.documents);
+          updateNotebookDocumentCount(state.selectedNotebook.id, docsResponse.documents.length);
           return true;
         }
         return false;
@@ -155,7 +172,7 @@ export function useNotebooks() {
         return false;
       }
     },
-    [state.selectedNotebook]
+    [state.selectedNotebook, updateNotebookDocumentCount]
   );
 
   // Delete a document
@@ -165,14 +182,16 @@ export function useNotebooks() {
 
       try {
         await api.deleteDocument(state.selectedNotebook.id, sourceId);
-        setDocuments((prev) => prev.filter((d) => d.source_id !== sourceId));
+        const docsResponse = await api.getDocuments(state.selectedNotebook.id);
+        setDocuments(docsResponse.documents);
+        updateNotebookDocumentCount(state.selectedNotebook.id, docsResponse.documents.length);
         return true;
       } catch (error) {
         console.error('Failed to delete document:', error);
         return false;
       }
     },
-    [state.selectedNotebook]
+    [state.selectedNotebook, updateNotebookDocumentCount]
   );
 
   // Toggle document active state

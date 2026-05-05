@@ -136,8 +136,14 @@ def create_settings_routes(app):
             if not enabled:
                 message = "Reranker disabled"
             elif model:
-                is_local = new_config.get("is_local", False)
-                source = "local model" if is_local else "HuggingFace"
+                if new_config.get("is_groq", False):
+                    source = "Groq"
+                elif model.lower() in {"xsmall", "xsmall-v1", "base", "base-v1", "large", "large-v1"}:
+                    source = "local cross-encoder"
+                elif new_config.get("is_local", False):
+                    source = "local model"
+                else:
+                    source = "HuggingFace"
                 message = f"Reranker model changed to {model} ({source}), will load on next query"
             else:
                 message = "Reranker configuration updated"

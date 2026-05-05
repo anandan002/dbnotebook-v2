@@ -17,6 +17,7 @@ import type {
   StudioGenerateResponse,
   StudioGeneratorsResponse,
   GeneratedContent,
+  ModelProvider,
 } from '../types';
 
 import type { TokenMetricsResponse } from '../types/auth';
@@ -143,7 +144,7 @@ export async function updateNotebook(
   id: string,
   data: Partial<Notebook>
 ): Promise<Notebook> {
-  const response = await fetchApi<{ success: boolean; notebook: { id: string; name: string; description?: string } }>(`/notebooks/${id}`, {
+  const response = await fetchApi<{ success: boolean; notebook: { id: string; name: string; description?: string; document_count?: number } }>(`/notebooks/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
@@ -151,7 +152,7 @@ export async function updateNotebook(
     id: response.notebook.id,
     name: response.notebook.name,
     description: response.notebook.description,
-    documentCount: 0,
+    documentCount: response.notebook.document_count ?? data.documentCount ?? 0,
   };
 }
 
@@ -339,7 +340,7 @@ export async function getModels(): Promise<ModelsResponse> {
   const models: ModelsResponse['models'] = [];
   for (const [provider, providerModels] of grouped) {
     models.push({
-      provider: provider as 'ollama' | 'openai' | 'anthropic' | 'google',
+      provider: provider as ModelProvider,
       models: providerModels.map(m => ({
         name: m.name,
         displayName: m.display_name || m.name
@@ -354,7 +355,7 @@ export async function getModels(): Promise<ModelsResponse> {
   return {
     models,
     currentModel: defaultModel,
-    currentProvider: defaultProvider as 'ollama' | 'openai' | 'anthropic' | 'google',
+    currentProvider: defaultProvider as ModelProvider,
   };
 }
 

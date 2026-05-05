@@ -98,9 +98,25 @@ def execute_query_streaming(
 
 User question: {query}"""
 
-    # Use streaming completion
+    # Use streaming completion. Some providers expose incremental text in
+    # `delta`; others expose cumulative text in `text`.
+    emitted_text = ""
     for token in llm.stream_complete(prompt):
-        yield token.delta
+        delta = getattr(token, "delta", None)
+        if delta:
+            emitted_text += delta
+            yield delta
+            continue
+
+        text = getattr(token, "text", None)
+        if text:
+            if text.startswith(emitted_text):
+                chunk = text[len(emitted_text):]
+            else:
+                chunk = text
+            if chunk:
+                emitted_text += chunk
+                yield chunk
 
 
 def build_prompt(

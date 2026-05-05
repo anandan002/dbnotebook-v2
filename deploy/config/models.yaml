@@ -15,7 +15,7 @@
 
 providers:
   ollama:
-    enabled: true
+    enabled: false
     type: local
     requires_api_key: false
     # Models are auto-detected from running Ollama server
@@ -30,6 +30,8 @@ providers:
     requires_api_key: true
     env_key: "OPENAI_API_KEY"
     models:
+      - name: "gpt-4.1-mini"
+        display_name: "GPT-4.1 Mini"
       - name: "gpt-4.1"
         display_name: "GPT-4.1"
       - name: "gpt-4o"
@@ -75,6 +77,60 @@ providers:
       - name: "gemini-1.5-flash"
         display_name: "Gemini 1.5 Flash"
 
+  groq:
+    enabled: true
+    type: api
+    requires_api_key: true
+    env_key: "GROQ_API_KEY"
+    models:
+      - name: "openai/gpt-oss-120b"
+        display_name: "GPT-OSS 120B"
+        context_window: 128000
+      - name: "openai/gpt-oss-20b"
+        display_name: "GPT-OSS 20B"
+        context_window: 128000
+      - name: "meta-llama/llama-4-maverick-17b-128e-instruct"
+        display_name: "Llama 4 Maverick"
+        context_window: 128000
+      - name: "meta-llama/llama-4-scout-17b-16e-instruct"
+        display_name: "Llama 4 Scout"
+        context_window: 128000
+      - name: "llama-3.3-70b-versatile"
+        display_name: "Llama 3.3 70B"
+        context_window: 128000
+
 # Default model to select on startup (optional)
-default_model: "llama3.1:latest"
-default_provider: "ollama"
+default_model: "gpt-4.1-mini"
+default_provider: "openai"
+
+# ============================================
+# Reranker Models
+# ============================================
+# Local models always available, Groq models available if GROQ_API_KEY is set.
+rerankers:
+  default: "base"
+
+  # Local cross-encoder models
+  local:
+    - id: "xsmall"
+      name: "XSmall"
+      description: "Fastest (~22s CPU)"
+    - id: "base"
+      name: "Base"
+      description: "Balanced (~30s CPU)"
+    - id: "large"
+      name: "Large"
+      description: "Best local (~60s CPU)"
+
+  # Groq rerankers. GPT-OSS models are not used for reranking because they
+  # are incompatible with the structured JSON mode used by the reranker.
+  groq:
+    - id: "groq:scout"
+      name: "Llama 4 Scout"
+      description: "Fast (~300ms)"
+    - id: "groq:maverick"
+      name: "Llama 4 Maverick"
+      description: "Better (~400ms)"
+    - id: "groq:llama70b"
+      name: "Llama 3.3 70B"
+      description: "High quality (~600ms)"

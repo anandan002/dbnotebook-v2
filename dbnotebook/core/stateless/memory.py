@@ -16,6 +16,7 @@ def load_conversation_history(
     notebook_id: str,
     user_id: str,
     max_history: int = 10,
+    session_id: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """Load conversation history from database.
 
@@ -44,6 +45,7 @@ def load_conversation_history(
             notebook_id=notebook_id,
             user_id=user_id,
             limit=max_history * 2,  # Each turn has 2 messages (user + assistant)
+            session_id=session_id,
         )
 
         # Convert to simple format
@@ -72,6 +74,7 @@ def save_conversation_turn(
     user_id: str,
     user_message: str,
     assistant_response: str,
+    session_id: Optional[str] = None,
 ) -> bool:
     """Save a complete conversation turn (user + assistant) to database.
 
@@ -99,6 +102,7 @@ def save_conversation_turn(
         conversation_store.save_messages(
             notebook_id=notebook_id,
             user_id=user_id,
+            session_id=session_id,
             messages=[
                 {"role": "user", "content": user_message},
                 {"role": "assistant", "content": assistant_response},

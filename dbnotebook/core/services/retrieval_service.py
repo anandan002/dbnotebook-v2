@@ -12,6 +12,7 @@ Usage:
 """
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
@@ -22,7 +23,6 @@ from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 from dbnotebook.core.providers.reranker_provider import (
     get_shared_reranker,
     is_reranker_enabled,
-    set_reranker_config,
 )
 from dbnotebook.core.config import get_config_value
 from .base import BaseService
@@ -74,16 +74,16 @@ class RetrievalRequest:
         """
         # Load config-based defaults
         config_use_raptor = get_config_value(
-            "ingestion", "chat_v2", "use_raptor_in_retrieval", default=True
+            "retrieval", "chat_v2", "use_raptor_in_retrieval", default=True
         )
         config_force_reranker = get_config_value(
-            "ingestion", "chat_v2", "force_reranker", default=True
+            "retrieval", "chat_v2", "force_reranker", default=True
         )
         config_raptor_top_k = get_config_value(
-            "ingestion", "chat_v2", "raptor_top_k", default=5
+            "retrieval", "chat_v2", "raptor_top_k", default=5
         )
         config_min_raptor_score = get_config_value(
-            "ingestion", "chat_v2", "min_raptor_score", default=0.3
+            "retrieval", "chat_v2", "min_raptor_score", default=0.3
         )
 
         return cls(
@@ -254,6 +254,14 @@ class RetrievalService(BaseService):
                 timings={"total_ms": 0},
             )
 
+        literal_match_available = self._has_literal_matches(request, nodes)
+        effective_use_reranker = request.use_reranker and not literal_match_available
+        if request.use_reranker and literal_match_available:
+            logger.info(
+                "Skipping chunk reranker for exact literal query '%s'",
+                request.query[:120],
+            )
+
         # Step 1: Get chunks via fast_retrieve pattern
         t1 = time.time()
         chunks = self._retrieve_chunks(
@@ -262,6 +270,7 @@ class RetrievalService(BaseService):
             llm=llm,
             vector_store=vector_store,
             retriever_factory=retriever_factory,
+            use_reranker=effective_use_reranker,
         )
         timings["chunk_retrieval_ms"] = int((time.time() - t1) * 1000)
 
@@ -280,7 +289,7 @@ class RetrievalService(BaseService):
         strategy_used = "hybrid" if chunks else "simple"
         reranker_applied = False
 
-        if request.use_reranker and (chunks or raptor_summaries):
+        if effective_use_reranker and (chunks or raptor_summaries):
             t3 = time.time()
             chunks, raptor_summaries, reranker_applied = self._apply_reranking(
                 request=request,
@@ -290,6 +299,14 @@ class RetrievalService(BaseService):
             timings["reranking_ms"] = int((time.time() - t3) * 1000)
             if reranker_applied:
                 strategy_used = "raptor_aware" if raptor_summaries else "hybrid_reranked"
+
+        chunks = self._preserve_literal_matches(
+            request=request,
+            nodes=nodes,
+            chunks=chunks,
+        )
+        if literal_match_available and chunks:
+            strategy_used = "hybrid_literal"
 
         timings["total_ms"] = int((time.time() - start_time) * 1000)
 
@@ -314,6 +331,7 @@ class RetrievalService(BaseService):
         llm: Any,
         vector_store: Any,
         retriever_factory: Any,
+        use_reranker: bool,
     ) -> List[NodeWithScore]:
         """Retrieve chunks using the fast_retrieve pattern.
 
@@ -339,8 +357,9 @@ class RetrievalService(BaseService):
                 retriever_factory=retriever_factory,
                 llm=llm,
                 source_ids=request.source_ids,
-                top_k=request.top_k,
+                top_k=self._candidate_top_k(request),
                 language=request.language,
+                use_reranker=use_reranker,
             )
         except Exception as e:
             logger.warning(f"Chunk retrieval failed: {e}", exc_info=True)
@@ -471,6 +490,115 @@ class RetrievalService(BaseService):
         )
 
         return final_chunks, final_summaries, True
+
+    def _candidate_top_k(self, request: RetrievalRequest) -> int:
+        """Retrieve a wider pre-rerank candidate pool than the final output."""
+        if request.use_reranker:
+            return max(request.top_k * 4, request.top_k + request.raptor_top_k, 20)
+        return request.top_k
+
+    def _preserve_literal_matches(
+        self,
+        request: RetrievalRequest,
+        nodes: List[TextNode],
+        chunks: List[NodeWithScore],
+    ) -> List[NodeWithScore]:
+        """Keep exact lexical matches visible for role/title style queries.
+
+        Dense retrieval and cross-encoder rerankers can under-rank hyphenated
+        role names such as "Security Officer-Network". Literal matches provide
+        deterministic evidence without disabling semantic retrieval.
+        """
+        terms = self._literal_query_terms(request.query)
+        if len(terms) < 2:
+            return chunks[: request.top_k]
+
+        existing_ids = {item.node.node_id for item in chunks}
+        max_score = max((item.score or 0.0 for item in chunks), default=0.0)
+        literal_matches: List[NodeWithScore] = []
+
+        for node in nodes:
+            normalized_text = self._normalize_for_literal_match(node.text)
+            if not all(term in normalized_text for term in terms):
+                continue
+
+            score = max_score + 1.0 + self._literal_match_score(normalized_text, terms)
+            literal_matches.append(NodeWithScore(node=node, score=score))
+
+        if not literal_matches:
+            return chunks[: request.top_k]
+
+        literal_matches.sort(key=lambda item: item.score or 0.0, reverse=True)
+
+        merged: List[NodeWithScore] = []
+        seen = set()
+        for item in literal_matches + chunks:
+            node_id = item.node.node_id
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            merged.append(item)
+            if len(merged) >= request.top_k:
+                break
+
+        if any(item.node.node_id not in existing_ids for item in merged[:3]):
+            logger.info(
+                "Literal match boost applied for query '%s' with terms=%s",
+                request.query[:120],
+                terms,
+            )
+
+        return merged
+
+    def _has_literal_matches(
+        self,
+        request: RetrievalRequest,
+        nodes: List[TextNode],
+    ) -> bool:
+        terms = self._literal_query_terms(request.query)
+        if len(terms) < 2:
+            return False
+        for node in nodes:
+            normalized_text = self._normalize_for_literal_match(node.text)
+            if all(term in normalized_text for term in terms):
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_for_literal_match(text: str) -> str:
+        text = re.sub(r"[^a-z0-9]+", " ", text.lower())
+        return f" {' '.join(text.split())} "
+
+    @classmethod
+    def _literal_query_terms(cls, query: str) -> List[str]:
+        stopwords = {
+            "a", "an", "and", "are", "as", "for", "from", "how", "is",
+            "of", "on", "or", "the", "this", "to", "what", "whats",
+            "will", "with", "do", "does", "did", "role", "roles",
+            "responsibility", "responsibilities", "duty", "duties",
+        }
+        normalized = cls._normalize_for_literal_match(query)
+        terms: List[str] = []
+        for term in normalized.split():
+            if len(term) < 3 or term in stopwords:
+                continue
+            if term not in terms:
+                terms.append(term)
+        return terms[:6]
+
+    @staticmethod
+    def _literal_match_score(normalized_text: str, terms: List[str]) -> float:
+        first_positions = [normalized_text.find(f" {term} ") for term in terms]
+        valid_positions = [pos for pos in first_positions if pos >= 0]
+        span_bonus = 0.0
+        if len(valid_positions) >= 2:
+            span = max(valid_positions) - min(valid_positions)
+            span_bonus = max(0.0, 1.0 - min(span, 1000) / 1000)
+        frequency_bonus = min(
+            sum(normalized_text.count(f" {term} ") for term in terms) / 10,
+            1.0,
+        )
+        return span_bonus + frequency_bonus
 
 
 def create_retrieval_service(

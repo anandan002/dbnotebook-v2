@@ -23,6 +23,8 @@ def create_retriever(
     source_ids: Optional[List[str]] = None,
     language: str = "eng",
     retriever_factory: Optional[Any] = None,
+    use_reranker: bool = True,
+    reranker_top_k: Optional[int] = None,
 ) -> Any:
     """Create a per-request chunk-only retriever (no RAPTOR in retrieval).
 
@@ -40,6 +42,8 @@ def create_retriever(
         source_ids: Optional list of source IDs to filter (unused, kept for API compat)
         language: Language code for prompts (default: "eng")
         retriever_factory: LocalRetriever instance with get_retrievers method
+        use_reranker: Whether the chunk retriever should apply reranking
+        reranker_top_k: Optional top-k override for reranked output
 
     Returns:
         Chunk-only retriever instance
@@ -53,8 +57,19 @@ def create_retriever(
     if retriever_factory is None:
         raise ValueError("retriever_factory is required to create per-request retrievers")
 
-    # Use get_retrievers() for chunk-only retrieval (matches API pattern)
-    # RAPTOR summaries are fetched separately via get_raptor_summaries()
+    if hasattr(retriever_factory, "get_unified_retriever"):
+        return retriever_factory.get_unified_retriever(
+            llm=llm,
+            language=language,
+            nodes=nodes,
+            vector_store=vector_store,
+            notebook_id=notebook_id,
+            source_ids=source_ids,
+            use_reranker=use_reranker,
+            reranker_top_k=reranker_top_k,
+        )
+
+    # Use get_retrievers() for older retriever factories.
     return retriever_factory.get_retrievers(
         llm=llm,
         language=language,
@@ -74,6 +89,7 @@ def fast_retrieve(
     source_ids: Optional[List[str]] = None,
     top_k: int = 6,
     language: str = "eng",
+    use_reranker: bool = True,
 ) -> List[NodeWithScore]:
     """Fast retrieval using the API pattern - no global state.
 
@@ -90,6 +106,7 @@ def fast_retrieve(
         source_ids: Optional list of source IDs to filter
         top_k: Maximum number of results to return
         language: Language code for prompts
+        use_reranker: Whether the chunk retriever should apply reranking
 
     Returns:
         List of NodeWithScore containing relevant chunks
@@ -118,6 +135,8 @@ def fast_retrieve(
             source_ids=source_ids,
             language=language,
             retriever_factory=retriever_factory,
+            use_reranker=use_reranker,
+            reranker_top_k=top_k,
         )
 
         # Retrieve relevant chunks

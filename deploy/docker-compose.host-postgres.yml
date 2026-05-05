@@ -1,0 +1,38 @@
+services:
+  dbnotebook:
+    image: dbnotebook:host-postgres
+    container_name: dbnotebook
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VITE_APP_BASE_PATH: /dbnotebook
+    ports:
+      - "7007:7860"
+    env_file:
+      - ../.env
+      - .env.host-postgres
+    environment:
+      DBNOTEBOOK_BASE_PATH: /dbnotebook
+      OLLAMA_HOST: host.docker.internal
+      OLLAMA_PORT: "11434"
+    volumes:
+      - ./config:/app/config:ro  # dbnotebook.yaml and models.yaml
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./uploads:/app/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - dbnotebook_network
+
+networks:
+  dbnotebook_network:
+    driver: bridge

@@ -10,6 +10,86 @@ Multimodal RAG Sales Enablement System with NotebookLM-style document organizati
 
 ## Quick Start
 
+### Option A: App Container + Local PostgreSQL
+
+Use this when PostgreSQL runs on the same machine as Docker.
+
+PostgreSQL prerequisites:
+
+- PostgreSQL is listening on port `5432`.
+- Database `dbnotebook_dev` exists.
+- The `pgvector` extension is installed and can be created by the configured user.
+- Host PostgreSQL allows password connections from Docker bridge clients.
+
+Configure the local env file:
+
+```bash
+cd deploy
+cp env.host-postgres.example .env.host-postgres
+# Edit .env.host-postgres with database credentials.
+# Provider API keys and model settings are loaded from ../.env.
+```
+
+Confirm deployment config files are present:
+
+```bash
+ls config/dbnotebook.yaml config/models.yaml
+```
+
+Start DBNotebook:
+
+```bash
+docker compose -f docker-compose.host-postgres.yml up -d --build
+```
+
+Rerun DBNotebook after code, config, or `.env` changes:
+
+```bash
+docker compose -f docker-compose.host-postgres.yml up -d --build --force-recreate dbnotebook
+```
+
+Access DBNotebook through Nginx at `http://20.244.34.144/dbnotebook/`.
+For direct container debugging, the app is published on `http://localhost:7007/`;
+API routes on the direct port do not include the `/dbnotebook` prefix.
+
+When Nginx is installed on the host, copy `deploy/nginx/dbnotebook.conf` into
+`/etc/nginx/sites-available/dbnotebook` and reload Nginx to serve the app at
+`http://20.244.34.144/dbnotebook`.
+
+If the server already includes `/etc/nginx/site-routes-enabled/*.conf` inside
+the public `20.244.34.144` server block, install `deploy/nginx/dbnotebook-route.conf`
+there instead.
+
+Operational commands:
+
+```bash
+# Validate compose configuration
+docker compose -f docker-compose.host-postgres.yml config
+
+# View app logs
+docker compose -f docker-compose.host-postgres.yml logs -f dbnotebook
+
+# Check container status
+docker ps --filter name=dbnotebook
+
+# Stop app container
+docker compose -f docker-compose.host-postgres.yml down
+
+# Health checks
+curl http://localhost:7007/api/health
+curl http://20.244.34.144/dbnotebook/api/health
+```
+
+Notes:
+
+- The app reaches host PostgreSQL through `host.docker.internal`.
+- The Docker image builds the React frontend with `/dbnotebook` as the base path.
+- URL-encode special characters in the database password inside `DATABASE_URL`.
+- Automatic SQL Chat few-shot dataset loading is disabled by default for this deployment.
+- Do not commit `.env.host-postgres`; it is intentionally ignored by Git.
+
+### Option B: Bundled Docker PostgreSQL
+
 ### 1. Login to GitHub Container Registry
 
 ```bash
@@ -71,6 +151,15 @@ FIRECRAWL_API_KEY=...
 
 ## Services
 
+For `docker-compose.host-postgres.yml`:
+
+| Service | Port | Description |
+|---------|------|-------------|
+| dbnotebook | 7860 | Web UI & API |
+| host PostgreSQL | 5432 | External local PostgreSQL + pgvector |
+
+For `docker-compose.yml`:
+
 | Service | Port | Description |
 |---------|------|-------------|
 | dbnotebook | 7860 | Web UI & API |
@@ -83,7 +172,7 @@ FIRECRAWL_API_KEY=...
 | `./data/` | Uploaded documents, embeddings |
 | `./outputs/` | Generated content (infographics, mind maps) |
 | `./uploads/` | Temporary upload files |
-| `./config/` | Model configurations |
+| `./config/` | Runtime YAML config (`dbnotebook.yaml`, `models.yaml`) |
 
 ## Commands
 
@@ -116,11 +205,13 @@ gh auth token | docker login ghcr.io -u YOUR_USERNAME --password-stdin
 
 ### Ollama not connecting
 - Ensure Ollama is running on host: `ollama serve`
-- Check OLLAMA_HOST in .env points to `host.docker.internal:11434`
+- For Docker, set `OLLAMA_HOST=host.docker.internal` and `OLLAMA_PORT=11434`
 
 ### Database connection issues
-- Wait for postgres healthcheck to pass
-- Check logs: `docker compose logs postgres`
+- For host PostgreSQL, confirm `DATABASE_URL` uses `host.docker.internal`, not `localhost`.
+- Confirm the target database exists and `CREATE EXTENSION IF NOT EXISTS vector` succeeds.
+- Confirm local PostgreSQL accepts password auth from Docker bridge clients.
+- For bundled Docker PostgreSQL, wait for the postgres healthcheck and check `docker compose logs postgres`.
 
 ## Features
 

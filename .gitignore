@@ -132,6 +132,11 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
+.env.production
+.env.host-postgres
+deploy/.env
+deploy/.env.*
 .venv
 env/
 venv/
