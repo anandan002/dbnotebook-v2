@@ -1,6 +1,6 @@
 # Docker-specific requirements
-# torch is pre-installed from local wheel (./wheels/) - pin version to prevent pip upgrade
-torch==2.5.1
+# torch is installed separately from the PyTorch CPU wheel index in Dockerfile.
+# Do not add torch here; PyPI's default Linux wheel pulls CUDA dependencies.
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.2
 aiosignal==1.4.0

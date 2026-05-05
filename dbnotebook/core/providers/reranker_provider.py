@@ -56,6 +56,11 @@ _reranker_enabled: bool = True  # Runtime enable/disable flag
 # Default local model directory (relative to project root)
 DEFAULT_LOCAL_MODEL_DIR = "models/rerankers"
 
+
+def _env_disables_reranker() -> bool:
+    """Return True when reranking is disabled by environment."""
+    return os.getenv("DISABLE_RERANKER", "").strip().lower() in {"1", "true", "yes", "on"}
+
 # Local cross-encoder model aliases
 MODEL_ALIASES = {
     "base": "mxbai-rerank-base-v1",
@@ -472,6 +477,10 @@ def get_shared_reranker(
         model = env_model
 
     # Early return if reranker is disabled globally
+    if _env_disables_reranker():
+        logger.debug("Reranker disabled by DISABLE_RERANKER env var")
+        return None
+
     if not _reranker_enabled:
         return None
 
@@ -606,11 +615,13 @@ def get_reranker_config() -> dict:
         - is_groq: Whether using Groq LLM reranker
     """
     with _reranker_lock:
+        env_disabled = _env_disables_reranker()
+        effective_enabled = _reranker_enabled and not env_disabled
         model = _reranker_config.get("model", "base")
         is_groq = model.lower().startswith("groq:")
 
         resolved = _reranker_config.get("resolved_model")
-        if resolved is None and _reranker_enabled and not is_groq:
+        if resolved is None and effective_enabled and not is_groq:
             resolved = resolve_model_path(model)
 
         # For Groq models, resolved is the full Groq model ID
@@ -619,7 +630,7 @@ def get_reranker_config() -> dict:
             resolved = GROQ_MODEL_ALIASES.get(groq_alias, groq_alias)
 
         return {
-            "enabled": _reranker_enabled,
+            "enabled": effective_enabled,
             "model": model,
             "resolved_model": resolved,
             "top_n": _reranker_config.get("top_n", 10),
@@ -635,7 +646,7 @@ def is_reranker_enabled() -> bool:
     Returns:
         True if reranker is enabled, False otherwise
     """
-    return _reranker_enabled
+    return _reranker_enabled and not _env_disables_reranker()
 
 
 def list_available_models() -> list[dict]:

@@ -14,7 +14,10 @@ config = context.config
 # This allows Docker containers to use their own DATABASE_URL
 database_url = os.environ.get("DATABASE_URL")
 if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+    # ConfigParser treats percent signs as interpolation markers. DATABASE_URL
+    # commonly contains percent-encoded credentials, so escape them before
+    # handing the URL to Alembic's config object.
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

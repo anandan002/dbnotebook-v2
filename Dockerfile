@@ -7,6 +7,8 @@ COPY frontend/package*.json ./
 RUN npm ci
 
 COPY frontend/ ./
+ARG VITE_APP_BASE_PATH=/
+ENV VITE_APP_BASE_PATH=${VITE_APP_BASE_PATH}
 RUN npm run build
 
 # Python build stage
@@ -23,8 +25,9 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# Install CPU-only PyTorch from PyPI index
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# Install CPU-only PyTorch. Keep this out of requirements-docker.txt so pip
+# does not fall back to the default CUDA-enabled PyPI wheel during image builds.
+RUN pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 
 # Install remaining dependencies (without torch)
 COPY requirements-docker.txt .
@@ -32,7 +35,7 @@ RUN pip install --no-cache-dir -r requirements-docker.txt
 
 # Download HuggingFace reranker models during build (embeddings use OpenAI API)
 # Options: large (~3GB, slow), base (~500MB, medium), xsmall (~100MB, fast)
-RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('mixedbread-ai/mxbai-rerank-xsmall-v1')"
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('mixedbread-ai/mxbai-rerank-base-v1')"
 
 # Pre-download NLTK punkt tokenizer (used by LlamaIndex) to avoid runtime download
 RUN python -c "import nltk; nltk.download('punkt_tab', download_dir='/app/venv/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache')"

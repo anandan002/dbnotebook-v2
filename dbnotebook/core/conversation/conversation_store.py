@@ -46,7 +46,8 @@ class ConversationStore:
         notebook_id: str,
         user_id: str,
         role: str,
-        content: str
+        content: str,
+        session_id: Optional[str] = None,
     ) -> str:
         """
         Save a single conversation message.
@@ -73,6 +74,7 @@ class ConversationStore:
                     conversation_id=uuid4(),
                     notebook_id=UUID(notebook_id),
                     user_id=UUID(user_id),
+                    session_id=UUID(session_id) if session_id else None,
                     role=role,
                     content=content
                 )
@@ -97,7 +99,8 @@ class ConversationStore:
         self,
         notebook_id: str,
         user_id: str,
-        messages: List[Dict]
+        messages: List[Dict],
+        session_id: Optional[str] = None,
     ) -> List[str]:
         """
         Save multiple conversation messages in batch.
@@ -129,6 +132,7 @@ class ConversationStore:
                         conversation_id=uuid4(),
                         notebook_id=UUID(notebook_id),
                         user_id=UUID(user_id),
+                        session_id=UUID(session_id) if session_id else None,
                         role=role,
                         content=content
                     )
@@ -159,7 +163,8 @@ class ConversationStore:
         notebook_id: str,
         user_id: str,
         limit: int = 50,
-        offset: int = 0
+        offset: int = 0,
+        session_id: Optional[str] = None,
     ) -> List[Dict]:
         """
         Retrieve conversation history for a notebook.
@@ -176,10 +181,21 @@ class ConversationStore:
         """
         try:
             with self.db.get_session() as session:
-                conversations = session.query(Conversation).filter(
+                query = session.query(Conversation).filter(
                     Conversation.notebook_id == UUID(notebook_id),
                     Conversation.user_id == UUID(user_id)
-                ).order_by(Conversation.timestamp.asc()).offset(offset).limit(limit).all()
+                )
+
+                if session_id:
+                    query = query.filter(Conversation.session_id == UUID(session_id))
+
+                conversations = (
+                    query.order_by(Conversation.timestamp.desc())
+                    .offset(offset)
+                    .limit(limit)
+                    .all()
+                )
+                conversations = list(reversed(conversations))
 
                 result = []
                 for conv in conversations:
@@ -187,6 +203,7 @@ class ConversationStore:
                         "conversation_id": str(conv.conversation_id),
                         "role": conv.role,
                         "content": conv.content,
+                        "session_id": str(conv.session_id) if conv.session_id else None,
                         "timestamp": conv.timestamp.isoformat() if conv.timestamp else None
                     })
 

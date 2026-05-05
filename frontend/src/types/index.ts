@@ -77,7 +77,7 @@ export interface DocumentListResponse {
 }
 
 // Model types
-export type ModelProvider = 'ollama' | 'openai' | 'anthropic' | 'google';
+export type ModelProvider = 'ollama' | 'openai' | 'anthropic' | 'google' | 'groq';
 
 export interface Model {
   name: string;

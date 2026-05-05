@@ -8,7 +8,7 @@ Endpoint: POST /api/v2/chat
 
 import logging
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 from flask import request, jsonify, Response
 
 from llama_index.core import Settings
@@ -34,6 +34,43 @@ logger = logging.getLogger(__name__)
 
 # Note: V2 browser-facing endpoints don't require API key authentication.
 # Use /api/query with X-API-Key header for programmatic API access.
+
+
+def _normalize_session_id(session_id: str | None) -> str:
+    """Return a valid UUID session id, generating one if input is invalid."""
+    if session_id:
+        try:
+            return str(UUID(str(session_id)))
+        except ValueError:
+            logger.warning("Invalid session_id received; generated a new one")
+    return generate_session_id()
+
+
+def _optional_session_id(session_id: str | None) -> str | None:
+    """Return a UUID session id for filters, or None when omitted/invalid."""
+    if not session_id:
+        return None
+    try:
+        return str(UUID(str(session_id)))
+    except ValueError:
+        logger.warning("Ignoring invalid session_id filter")
+        return None
+
+
+def _restore_reranker_config(config: dict | None) -> None:
+    """Restore reranker config after a per-request override."""
+    if not config:
+        return
+    try:
+        from dbnotebook.core.providers.reranker_provider import set_reranker_config
+
+        set_reranker_config(
+            model=config.get("model"),
+            enabled=config.get("enabled", True),
+            top_n=config.get("top_n"),
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to restore reranker config: {exc}")
 
 
 def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversation_store):
@@ -85,6 +122,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
         timings = {}
         trace_id: str = ""
         query_id: str = str(uuid4())
+        original_reranker_config = None
 
         try:
             data = request.json or {}
@@ -105,7 +143,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
             # Optional parameters
             model_name = data.get("model")
-            session_id = data.get("session_id") or generate_session_id()
+            session_id = _normalize_session_id(data.get("session_id"))
             include_history = data.get("include_history", True)
             max_history = min(data.get("max_history", 10), 50)
             include_sources = data.get("include_sources", True)
@@ -132,19 +170,18 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 except Exception:
                     pass
 
-            # Apply per-request reranker model if specified
-            original_reranker_config = None
-            if reranker_model:
-                from dbnotebook.core.providers.reranker_provider import (
-                    get_reranker_config, set_reranker_config
-                )
-                original_reranker_config = get_reranker_config()
-                set_reranker_config(
-                    model=reranker_model,
-                    enabled=use_reranker,
-                    top_n=top_k,
-                )
-                logger.debug(f"Per-request reranker: model={reranker_model}, enabled={use_reranker}")
+            # Apply per-request reranker config. This must run even when no model
+            # is supplied so use_reranker=false disables the lower-level retriever reranker.
+            from dbnotebook.core.providers.reranker_provider import (
+                get_reranker_config, set_reranker_config
+            )
+            original_reranker_config = get_reranker_config()
+            set_reranker_config(
+                model=reranker_model or original_reranker_config.get("model"),
+                enabled=use_reranker,
+                top_n=top_k,
+            )
+            logger.debug(f"Per-request reranker: model={reranker_model or original_reranker_config.get('model')}, enabled={use_reranker}")
 
             # Get LLM instance for this specific request
             from dbnotebook.core.model.model import LocalRAGModel
@@ -172,6 +209,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             timings["1_notebook_lookup_ms"] = int((time.time() - t1) * 1000)
 
             if not notebook:
+                _restore_reranker_config(original_reranker_config)
                 return not_found("Notebook", notebook_id)
 
             # Step 2: Load conversation history (from database)
@@ -183,6 +221,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     notebook_id=notebook_id,
                     user_id=user_id,
                     max_history=max_history,
+                    session_id=session_id,
                 )
             timings["2a_load_history_ms"] = int((time.time() - t2) * 1000)
 
@@ -382,6 +421,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 user_id=user_id,
                 user_message=query,
                 assistant_response=response_text,
+                session_id=session_id,
             )
             timings["8_save_history_ms"] = int((time.time() - t8) * 1000)
 
@@ -404,7 +444,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             except Exception as trace_end_err:
                 logger.debug(f"Trace end failed (non-fatal): {trace_end_err}")
 
-            return jsonify({
+            response = jsonify({
                 "success": True,
                 "response": response_text,
                 "session_id": session_id,
@@ -421,8 +461,11 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     "query_id": query_id,
                 }
             })
+            _restore_reranker_config(original_reranker_config)
+            return response
 
         except Exception as e:
+            _restore_reranker_config(original_reranker_config)
             logger.error(f"Error in V2 chat endpoint: {e}")
             import traceback
             logger.error(traceback.format_exc())
@@ -455,7 +498,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
             # Optional parameters
             model_name = data.get("model")
-            session_id = data.get("session_id") or generate_session_id()
+            session_id = _normalize_session_id(data.get("session_id"))
             include_history = data.get("include_history", True)
             max_history = min(data.get("max_history", 10), 50)
             max_sources = min(data.get("max_sources", 6), 20)
@@ -467,19 +510,18 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             top_k_explicit = data.get("top_k")
             top_k = top_k_explicit if top_k_explicit is not None else max_sources
 
-            # Apply per-request reranker model if specified
-            original_reranker_config = None
-            if reranker_model:
-                from dbnotebook.core.providers.reranker_provider import (
-                    get_reranker_config, set_reranker_config
-                )
-                original_reranker_config = get_reranker_config()
-                set_reranker_config(
-                    model=reranker_model,
-                    enabled=use_reranker,
-                    top_n=top_k,
-                )
-                logger.debug(f"Per-request reranker (stream): model={reranker_model}, enabled={use_reranker}")
+            # Apply per-request reranker config. This must run even when no model
+            # is supplied so use_reranker=false disables the lower-level retriever reranker.
+            from dbnotebook.core.providers.reranker_provider import (
+                get_reranker_config, set_reranker_config
+            )
+            original_reranker_config = get_reranker_config()
+            set_reranker_config(
+                model=reranker_model or original_reranker_config.get("model"),
+                enabled=use_reranker,
+                top_n=top_k,
+            )
+            logger.debug(f"Per-request reranker (stream): model={reranker_model or original_reranker_config.get('model')}, enabled={use_reranker}")
 
             # Get LLM instance for this specific request
             from dbnotebook.core.model.model import LocalRAGModel
@@ -491,6 +533,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             # Verify notebook
             notebook = notebook_manager.get_notebook(notebook_id)
             if not notebook:
+                _restore_reranker_config(original_reranker_config)
                 return not_found("Notebook", notebook_id)
 
             # Start trace for this streaming request
@@ -526,6 +569,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                             notebook_id=notebook_id,
                             user_id=user_id,
                             max_history=max_history,
+                            session_id=session_id,
                         )
                     timings["1a_load_history_ms"] = int((time_module.time() - t1) * 1000)
 
@@ -636,6 +680,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         user_id=user_id,
                         user_message=query,
                         assistant_response=response_text,
+                        session_id=session_id,
                     )
                     timings["7_save_history_ms"] = int((time_module.time() - t7) * 1000)
 
@@ -700,13 +745,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
                 finally:
                     # Restore original reranker config if it was overridden
-                    if original_reranker_config is not None:
-                        from dbnotebook.core.providers.reranker_provider import set_reranker_config
-                        set_reranker_config(
-                            model=original_reranker_config.get("model"),
-                            enabled=original_reranker_config.get("enabled", True),
-                            top_n=original_reranker_config.get("top_n"),
-                        )
+                    _restore_reranker_config(original_reranker_config)
 
             return Response(
                 generate(),
@@ -750,6 +789,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 notebook_id=notebook_id,
                 user_id=user_id,
                 max_history=limit,
+                session_id=_optional_session_id(request.args.get("session_id")),
             )
 
             return jsonify({

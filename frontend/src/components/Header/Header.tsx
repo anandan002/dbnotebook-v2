@@ -20,6 +20,7 @@ const providerIcons: Record<ModelProvider, React.ReactNode> = {
   openai: <Sparkles className="w-4 h-4" />,
   anthropic: <Bot className="w-4 h-4" />,
   google: <Cloud className="w-4 h-4" />,
+  groq: <Zap className="w-4 h-4" />,
 };
 
 const providerColors: Record<ModelProvider, string> = {
@@ -27,6 +28,7 @@ const providerColors: Record<ModelProvider, string> = {
   openai: 'text-green-400',
   anthropic: 'text-orange-400',
   google: 'text-blue-400',
+  groq: 'text-purple-400',
 };
 
 const providerLabels: Record<ModelProvider, string> = {
@@ -34,6 +36,7 @@ const providerLabels: Record<ModelProvider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   google: 'Google',
+  groq: 'Groq',
 };
 
 interface NavTab {

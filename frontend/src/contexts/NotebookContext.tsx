@@ -2,6 +2,10 @@ import { createContext, useContext, useState, useCallback, useEffect, type React
 import type { Notebook } from '../types';
 import { withBasePath } from '../utils/paths';
 
+type BackendNotebook = Notebook & {
+  document_count?: number;
+};
+
 interface NotebookContextType {
   // State
   notebooks: Notebook[];
@@ -40,7 +44,11 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
 
       const data = await response.json();
-      setNotebooksState(data.notebooks || []);
+      const normalizedNotebooks = ((data.notebooks || []) as BackendNotebook[]).map((notebook) => ({
+        ...notebook,
+        documentCount: notebook.documentCount ?? notebook.document_count ?? 0,
+      }));
+      setNotebooksState(normalizedNotebooks);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load notebooks';
       setError(errorMessage);

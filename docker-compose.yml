@@ -27,7 +27,7 @@ services:
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-dbnotebook-session-secret-key-2026}
     # Note: Using local PostgreSQL (no depends_on needed)
     volumes:
-      - ./config:/app/config:ro # models.yaml - editable
+      - ./config:/app/config:ro # dbnotebook.yaml and models.yaml
       - ./data:/app/data # documents, cache
       - ./outputs:/app/outputs # generated content
       - ./uploads:/app/uploads # user uploads

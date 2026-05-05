@@ -30,7 +30,6 @@ import remarkGfm from 'remark-gfm';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { Header } from '../components/Header';
 import { MainLayout } from '../components/Layout';
-import { useNotebook } from '../contexts';
 import { useNotebooks } from '../hooks/useNotebooks';
 import { useToast } from '../hooks/useToast';
 import { ToastContainer } from '../components/ui';
@@ -99,8 +98,8 @@ const MarkdownComponents = {
 };
 
 export function DocumentsLandingPage() {
-  const { notebooks } = useNotebook();
   const {
+    notebooks,
     createNotebook,
     updateNotebook,
     deleteNotebook,
